@@ -10,8 +10,8 @@ public enum MetalStandaloneViewAlignment {
 
 public enum MetalAnimationItem {
     case text(String)
-    /// 垂直位置自动与相邻文本行的墨迹中心对齐，x 与 size 只决定水平位置和尺寸；高度超过行高时只显示顶部行高部分。
-    case staticView(UIView, x: CGFloat, size: CGSize)
+    /// 作为行内元素紧跟前一个元素排版，并在当前行内垂直居中；高度最大为当前行高。
+    case staticView(UIView, size: CGSize)
     /// 原生 View 独占一行并按 alignment 对齐，宽度夹紧到 MetalTextView 宽度；保留内部动画，仅执行上移动画。
     case standaloneView(
         UIView,
@@ -123,6 +123,25 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     public var maxBlur: Float = 8 {
         didSet { invalidateContentLayout() }
     }
+    public override var backgroundColor: UIColor? {
+        didSet {
+            guard let backgroundColor else {
+                clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                return
+            }
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            guard backgroundColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return }
+            clearColor = MTLClearColor(
+                red: Double(red),
+                green: Double(green),
+                blue: Double(blue),
+                alpha: Double(alpha)
+            )
+        }
+    }
 
     private var renderer: AnimationRenderer?
     private var lastContentRect = CGRect.null
@@ -170,15 +189,12 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
 
     public func layoutItemsIfNeeded() {
         guard let renderer, !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
-        let insets = safeAreaInsets
-        let horizontalMargin: CGFloat = 22
-        let top = insets.top + 18
-        let bottom = insets.bottom + 108
+        let bottom = safeAreaInsets.bottom + 108
         let contentRect = CGRect(
-            x: horizontalMargin,
+            x: 0,
             y: bottom,
-            width: bounds.width - horizontalMargin * 2,
-            height: bounds.height - top - bottom
+            width: bounds.width,
+            height: bounds.height - bottom
         )
         guard contentRect.width > 0, contentRect.height > 0 else { return }
         guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }

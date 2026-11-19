@@ -12,12 +12,22 @@ struct AnimationConfiguration {
     static let stagger: Float = 0.2
     
     /// 动画开始前的延迟时间，单位为秒。
-    static let startDelay: TimeInterval = 4
+    static let startDelay: TimeInterval = 1
     /// 动画单元在开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 10
+    /// 文本字体。
     static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
+    /// 字符间距，单位为点。
     static let letterSpacing: CGFloat = 0
+    /// 相邻文本行之间的额外间距，单位为点。
     static let lineSpacing: CGFloat = 0
+    /// 是否为每个文本行绘制随机背景色；颜色生成后保持不变，透明度为 0.5。
+    static let showsRandomLineColors = true
+    
+    /// 返回当前字体的行高，单位为点。
+    static func lineHeight() -> CGFloat {
+        font.lineHeight
+    }
 }
 
 struct AnimationInstance {
@@ -54,7 +64,6 @@ enum AnimationAtlasError: LocalizedError {
     case cannotCreateTexture
     case cannotRasterizeView
     case invalidViewFrame
-    case missingViewAnchor
     case atlasOverflow
 
     var errorDescription: String? {
@@ -63,13 +72,14 @@ enum AnimationAtlasError: LocalizedError {
         case .cannotCreateTexture: return "无法创建 Metal 动画纹理"
         case .cannotRasterizeView: return "无法生成静态 View 快照"
         case .invalidViewFrame: return "静态 View 的 frame 必须大于 0"
-        case .missingViewAnchor: return "静态 View 的垂直居中需要相邻文本"
         case .atlasOverflow: return "动画图集超出纹理尺寸限制"
         }
     }
 }
 
 enum AnimationAtlasBuilder {
+    private static var lineColors: [Int: UIColor] = [:]
+
     private struct TextItem {
         let itemIndex: Int
         let range: NSRange
@@ -77,12 +87,29 @@ enum AnimationAtlasBuilder {
 
     private struct TextLayout {
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
+        var staticFrames: [Int: CGRect] = [:]
         var standaloneFrames: [Int: CGRect] = [:]
+        var lineFrames: [CGRect] = []
     }
 
     private struct TextSegment {
         let glyphsByItem: [Int: [PositionedGlyph]]
+        let staticFrames: [Int: CGRect]
+        let lineFrames: [CGRect]
         let height: CGFloat
+    }
+
+    private struct StaticItem {
+        let itemIndex: Int
+        let size: CGSize
+    }
+
+    private final class InlineViewMetrics {
+        let width: CGFloat
+
+        init(width: CGFloat) {
+            self.width = width
+        }
     }
 
     private struct PositionedGlyph {
@@ -102,6 +129,7 @@ enum AnimationAtlasBuilder {
     private enum RasterKey: Hashable {
         case text(String, [GlyphKey])
         case image(ObjectIdentifier, CGSize)
+        case lineBackground(Int)
     }
 
     private struct Raster {
@@ -113,6 +141,7 @@ enum AnimationAtlasBuilder {
         let key: RasterKey
         let bounds: CGRect
         let delay: Float
+        let participatesInTimeline: Bool
     }
 
     static func build(
@@ -166,25 +195,19 @@ enum AnimationAtlasBuilder {
                     delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
-            case .staticView(let view, let x, let size):
-                let frame = try centeredViewFrame(
-                    itemIndex: itemIndex,
-                    x: x,
-                    size: size,
-                    lineHeight: font.lineHeight + lineSpacing,
-                    items: items,
-                    glyphsByItem: glyphsByItem,
-                    viewportHeight: viewportSize.height
-                )
-                description = try makeViewDescription(
-                    view: view,
-                    fullSize: size,
-                    displayFrame: frame,
-                    viewportSize: viewportSize,
-                    contentScale: scale,
-                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
-                    rasters: &rasters
-                )
+            case .staticView(let view, _):
+                if let frame = textLayout.staticFrames[itemIndex] {
+                    description = try makeViewDescription(
+                        view: view,
+                        displayFrame: frame,
+                        viewportSize: viewportSize,
+                        contentScale: scale,
+                        delay: delay(for: descriptions.count + standaloneViewLayouts.count),
+                        rasters: &rasters
+                    )
+                } else {
+                    description = nil
+                }
             case .standaloneView(let view, _, _):
                 description = nil
                 standaloneViewLayouts.append(StandaloneViewLayout(
@@ -196,6 +219,40 @@ enum AnimationAtlasBuilder {
             if let description {
                 descriptions.append(description)
             }
+        }
+
+        if AnimationConfiguration.showsRandomLineColors {
+            let backgrounds = textLayout.lineFrames.enumerated().map { lineIndex, frame in
+                let key = RasterKey.lineBackground(lineIndex)
+                let color: UIColor
+                if let existingColor = lineColors[lineIndex] {
+                    color = existingColor
+                } else {
+                    color = UIColor(
+                        hue: .random(in: 0...1),
+                        saturation: 0.7,
+                        brightness: 1,
+                        alpha: 0.5
+                    )
+                    lineColors[lineIndex] = color
+                }
+                rasters[key] = Raster(size: frame.size) { context, rect in
+                    context.setFillColor(color.cgColor)
+                    context.fill(rect)
+                }
+                return Description(
+                    key: key,
+                    bounds: CGRect(
+                        x: frame.minX,
+                        y: viewportSize.height - frame.maxY,
+                        width: frame.width,
+                        height: frame.height
+                    ),
+                    delay: -AnimationConfiguration.duration,
+                    participatesInTimeline: false
+                )
+            }
+            descriptions.insert(contentsOf: backgrounds, at: 0)
         }
 
         return try makeAtlas(
@@ -239,7 +296,7 @@ enum AnimationAtlasBuilder {
                     width: width,
                     height: height
                 )
-                cursorY -= height
+                cursorY -= height + lineSpacing
                 index += 1
                 continue
             }
@@ -256,12 +313,20 @@ enum AnimationAtlasBuilder {
                 textColor: textColor,
                 lineSpacing: lineSpacing,
                 contentRect: contentRect,
+                viewportHeight: viewportSize.height,
                 top: cursorY
             )
             for (itemIndex, glyphs) in segment.glyphsByItem {
                 layout.glyphsByItem[itemIndex, default: []].append(contentsOf: glyphs)
             }
+            for (itemIndex, frame) in segment.staticFrames {
+                layout.staticFrames[itemIndex] = frame
+            }
+            layout.lineFrames.append(contentsOf: segment.lineFrames)
             cursorY -= segment.height
+            if segment.height > 0 {
+                cursorY -= lineSpacing
+            }
         }
         return layout
     }
@@ -273,42 +338,50 @@ enum AnimationAtlasBuilder {
         textColor: UIColor,
         lineSpacing: CGFloat,
         contentRect: CGRect,
+        viewportHeight: CGFloat,
         top: CGFloat
     ) -> TextSegment {
-        var fullText = ""
+        let attributedText = NSMutableAttributedString()
         var textItems: [TextItem] = []
-        var location = 0
+        var staticItems: [Int: StaticItem] = [:]
 
         for itemIndex in range {
-            guard case .text(let text) = items[itemIndex] else { continue }
-            let length = text.utf16.count
-            textItems.append(TextItem(
-                itemIndex: itemIndex,
-                range: NSRange(location: location, length: length)
-            ))
-            fullText.append(text)
-            location += length
+            switch items[itemIndex] {
+            case .text(let text):
+                textItems.append(TextItem(
+                    itemIndex: itemIndex,
+                    range: NSRange(location: attributedText.length, length: text.utf16.count)
+                ))
+                attributedText.append(NSAttributedString(string: text))
+            case .staticView(_, let size):
+                staticItems[attributedText.length] = StaticItem(itemIndex: itemIndex, size: size)
+                let delegate = makeInlineViewDelegate(width: max(0, size.width))
+                attributedText.append(NSAttributedString(
+                    string: "\u{FFFC}",
+                    attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
+                ))
+            case .standaloneView:
+                continue
+            }
         }
 
-        guard !fullText.isEmpty else {
-            return TextSegment(glyphsByItem: [:], height: 0)
+        guard attributedText.length > 0 else {
+            return TextSegment(glyphsByItem: [:], staticFrames: [:], lineFrames: [], height: 0)
         }
 
-        let lineHeight = font.lineHeight + lineSpacing
+        let lineHeight = font.lineHeight
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.minimumLineHeight = lineHeight
         paragraphStyle.maximumLineHeight = lineHeight
+        paragraphStyle.lineSpacing = lineSpacing
         paragraphStyle.lineBreakMode = .byCharWrapping
+        attributedText.addAttributes([
+            .font: font,
+            .kern: AnimationConfiguration.letterSpacing,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraphStyle
+        ], range: NSRange(location: 0, length: attributedText.length))
 
-        let attributedText = NSAttributedString(
-            string: fullText,
-            attributes: [
-                .font: font,
-                .kern: AnimationConfiguration.letterSpacing,
-                .foregroundColor: textColor,
-                .paragraphStyle: paragraphStyle
-            ]
-        )
         let framesetter = CTFramesetterCreateWithAttributedString(attributedText)
         let suggestedSize = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter,
@@ -320,6 +393,8 @@ enum AnimationAtlasBuilder {
         let textHeight = ceil(suggestedSize.height)
         let visibleHeight = min(textHeight, max(0, top - contentRect.minY))
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
+        var staticFrames: [Int: CGRect] = [:]
+        var lineFrames: [CGRect] = []
 
         if visibleHeight > 0 {
             let frameRect = CGRect(
@@ -340,8 +415,29 @@ enum AnimationAtlasBuilder {
             CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &lineOrigins)
 
             for (lineIndex, line) in lines.enumerated() {
+                let lineTop = top - CGFloat(lineIndex) * (lineHeight + lineSpacing)
+                lineFrames.append(CGRect(
+                    x: frameRect.minX,
+                    y: viewportHeight - lineTop,
+                    width: frameRect.width,
+                    height: lineHeight
+                ))
                 let runs = CTLineGetGlyphRuns(line) as! [CTRun]
                 for run in runs {
+                    let runRange = CTRunGetStringRange(run)
+                    if let staticItem = staticItems[runRange.location] {
+                        var position = CGPoint.zero
+                        CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
+                        let displayHeight = min(max(0, staticItem.size.height), lineHeight)
+                        staticFrames[staticItem.itemIndex] = CGRect(
+                            x: frameRect.minX + lineOrigins[lineIndex].x + position.x,
+                            y: viewportHeight - lineTop + (lineHeight - displayHeight) / 2,
+                            width: staticItem.size.width,
+                            height: displayHeight
+                        )
+                        continue
+                    }
+
                     let attributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any]
                     let runUIFont = attributes?[.font] as? UIFont ?? font
                     let runFont = runUIFont as CTFont
@@ -376,7 +472,28 @@ enum AnimationAtlasBuilder {
                 }
             }
         }
-        return TextSegment(glyphsByItem: glyphsByItem, height: textHeight)
+        return TextSegment(
+            glyphsByItem: glyphsByItem,
+            staticFrames: staticFrames,
+            lineFrames: lineFrames,
+            height: textHeight
+        )
+    }
+
+    private static func makeInlineViewDelegate(width: CGFloat) -> CTRunDelegate {
+        var callbacks = CTRunDelegateCallbacks(
+            version: kCTRunDelegateCurrentVersion,
+            dealloc: { pointer in
+                Unmanaged<InlineViewMetrics>.fromOpaque(pointer).release()
+            },
+            getAscent: { _ in 0 },
+            getDescent: { _ in 0 },
+            getWidth: { pointer in
+                Unmanaged<InlineViewMetrics>.fromOpaque(pointer).takeUnretainedValue().width
+            }
+        )
+        let metrics = InlineViewMetrics(width: width)
+        return CTRunDelegateCreate(&callbacks, Unmanaged.passRetained(metrics).toOpaque())!
     }
 
     private static func textItem(at stringIndex: Int, in items: [TextItem]) -> TextItem? {
@@ -453,73 +570,13 @@ enum AnimationAtlasBuilder {
         return Description(
             key: key,
             bounds: bounds,
-            delay: delay
+            delay: delay,
+            participatesInTimeline: true
         )
-    }
-
-    private static func centeredViewFrame(
-        itemIndex: Int,
-        x: CGFloat,
-        size: CGSize,
-        lineHeight: CGFloat,
-        items: [MetalAnimationItem],
-        glyphsByItem: [Int: [PositionedGlyph]],
-        viewportHeight: CGFloat
-    ) throws -> CGRect {
-        guard let lineCenter = anchorLineCenter(
-            itemIndex: itemIndex,
-            items: items,
-            glyphsByItem: glyphsByItem
-        ) else {
-            throw AnimationAtlasError.missingViewAnchor
-        }
-        let displayHeight = min(size.height, lineHeight)
-        // 实例空间 y 轴向上（原点在视口底部），view frame 的 y 轴向下。
-        return CGRect(
-            x: x,
-            y: viewportHeight - lineCenter - displayHeight / 2,
-            width: size.width,
-            height: displayHeight
-        )
-    }
-
-    private static func anchorLineCenter(
-        itemIndex: Int,
-        items: [MetalAnimationItem],
-        glyphsByItem: [Int: [PositionedGlyph]]
-    ) -> CGFloat? {
-        var anchorBaseline: CGFloat?
-        for index in (0..<itemIndex).reversed() {
-            if case .text = items[index], let glyphs = glyphsByItem[index], let last = glyphs.last {
-                anchorBaseline = last.baseline.y
-                break
-            }
-        }
-        if anchorBaseline == nil {
-            for index in (itemIndex + 1)..<items.count {
-                if case .text = items[index], let glyphs = glyphsByItem[index], let first = glyphs.first {
-                    anchorBaseline = first.baseline.y
-                    break
-                }
-            }
-        }
-        guard let anchorBaseline else { return nil }
-
-        var bounds = CGRect.null
-        for glyphs in glyphsByItem.values {
-            for glyph in glyphs where abs(glyph.baseline.y - anchorBaseline) < 0.5 {
-                bounds = bounds.union(glyph.localBounds.offsetBy(
-                    dx: glyph.baseline.x,
-                    dy: glyph.baseline.y
-                ))
-            }
-        }
-        return bounds.isNull ? nil : bounds.midY
     }
 
     private static func makeViewDescription(
         view: UIView,
-        fullSize: CGSize,
         displayFrame: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat,
@@ -530,8 +587,7 @@ enum AnimationAtlasBuilder {
             throw AnimationAtlasError.invalidViewFrame
         }
 
-        // 按完整尺寸布局，只快照顶部 displayFrame.height 的部分（超出行高时裁掉底部）。
-        view.frame = CGRect(origin: displayFrame.origin, size: fullSize)
+        view.frame = displayFrame
         view.setNeedsLayout()
         view.layoutIfNeeded()
 
@@ -545,7 +601,7 @@ enum AnimationAtlasBuilder {
             throw AnimationAtlasError.cannotRasterizeView
         }
 
-        let key = RasterKey.image(ObjectIdentifier(view), fullSize)
+        let key = RasterKey.image(ObjectIdentifier(view), displayFrame.size)
         if rasters[key] == nil {
             rasters[key] = Raster(size: displayFrame.size) { context, rect in
                 context.draw(image, in: rect)
@@ -560,7 +616,8 @@ enum AnimationAtlasBuilder {
         return Description(
             key: key,
             bounds: bounds,
-            delay: delay
+            delay: delay,
+            participatesInTimeline: true
         )
     }
 
@@ -699,7 +756,11 @@ enum AnimationAtlasBuilder {
         }
 
         // delay 随生成序号严格递增，排序后即实例的生成顺序。
-        let sequenceDelays = (descriptions.map(\.delay) + standaloneViewLayouts.map(\.delay)).sorted()
+        var sequenceDelays = standaloneViewLayouts.map(\.delay)
+        for description in descriptions where description.participatesInTimeline {
+            sequenceDelays.append(description.delay)
+        }
+        sequenceDelays.sort()
         let animationDuration = sequenceDelays.last.map { $0 + AnimationConfiguration.duration } ?? 0
         return AnimationAtlas(
             texture: texture,

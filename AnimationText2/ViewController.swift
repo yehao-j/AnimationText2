@@ -12,16 +12,17 @@ final class ViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
 
         let metalView = MetalTextView(frame: view.bounds, device: nil)
+        metalView.layer.borderColor = UIColor.red.cgColor
+        metalView.layer.borderWidth = 1
         metalView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(metalView)
         NSLayoutConstraint.activate([
-            metalView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            metalView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            metalView.topAnchor.constraint(equalTo: view.topAnchor),
-            metalView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            metalView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            metalView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            metalView.topAnchor.constraint(equalTo: view.topAnchor, constant: 100),
+            metalView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -150)
         ])
         self.metalView = metalView
-        metalView.lineSpacing = 8
         streamingBatches = DemoText.streamingBatches(
             staticViews: [
                 makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
@@ -186,12 +187,10 @@ final class ViewController: UIViewController {
 private enum DemoText {
     /// 第一批是静态 View 前缀；正文在外部拆分后按 token 边界随机分成小批次，模拟 SSE 分片推送。
     static func streamingBatches(staticViews: [UIView], standaloneView: UIView) -> [[MetalAnimationItem]] {
-        let viewSpacing = String(repeating: " ", count: 14)
         let prefix: [MetalAnimationItem] = [
             .text("汉"),
             .text("字"),
-            .text(viewSpacing),
-            .staticView(staticViews[0], x: 60, size: CGSize(width: 56, height: 56)),
+            .staticView(staticViews[0], size: CGSize(width: 56, height: 56)),
             .text("与"),
             .text(" Metal "),
             .text("一起"),
@@ -200,8 +199,7 @@ private enum DemoText {
 
             .text("单"),
             .text("词"),
-            .text(viewSpacing),
-            .staticView(staticViews[1], x: 60, size: CGSize(width: 56, height: 26)),
+            .staticView(staticViews[1], size: CGSize(width: 56, height: 26)),
             .text("夹在"),
             .text(" Chinese "),
             .text("和"),
@@ -211,8 +209,7 @@ private enum DemoText {
 
             .text("静"),
             .text("态"),
-            .text(viewSpacing),
-            .staticView(staticViews[2], x: 60, size: CGSize(width: 56, height: 26)),
+            .staticView(staticViews[2], size: CGSize(width: 56, height: 26)),
             .text("也能"),
             .text("和"),
             .text(" Text "),
