@@ -3,7 +3,7 @@ import UIKit
 
 public enum MetalAnimationItem {
     case text(String)
-    /// 垂直位置自动与相邻文本行的墨迹中心对齐，x 与 size 只决定水平位置和尺寸；size.height 不能超过行高。
+    /// 垂直位置自动与相邻文本行的墨迹中心对齐，x 与 size 只决定水平位置和尺寸；高度超过行高时只显示顶部行高部分。
     case staticView(UIView, x: CGFloat, size: CGSize)
 }
 

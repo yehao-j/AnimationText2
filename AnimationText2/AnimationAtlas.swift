@@ -40,7 +40,6 @@ enum AnimationAtlasError: LocalizedError {
     case cannotRasterizeView
     case invalidViewFrame
     case missingViewAnchor
-    case viewExceedsLineHeight(height: CGFloat, lineHeight: CGFloat)
     case atlasOverflow
 
     var errorDescription: String? {
@@ -50,8 +49,6 @@ enum AnimationAtlasError: LocalizedError {
         case .cannotRasterizeView: return "无法生成静态 View 快照"
         case .invalidViewFrame: return "静态 View 的 frame 必须大于 0"
         case .missingViewAnchor: return "静态 View 的垂直居中需要相邻文本"
-        case .viewExceedsLineHeight(let height, let lineHeight):
-            return String(format: "静态 View 高度 %.2f 超过行高 %.2f", height, lineHeight)
         case .atlasOverflow: return "动画图集超出纹理尺寸限制"
         }
     }
@@ -129,21 +126,19 @@ enum AnimationAtlasBuilder {
                     rasters: &rasters
                 )
             case .staticView(let view, let x, let size):
-                let lineHeight = font.lineHeight + lineSpacing
-                guard size.height <= lineHeight else {
-                    throw AnimationAtlasError.viewExceedsLineHeight(height: size.height, lineHeight: lineHeight)
-                }
                 let frame = try centeredViewFrame(
                     itemIndex: itemIndex,
                     x: x,
                     size: size,
+                    lineHeight: font.lineHeight + lineSpacing,
                     items: items,
                     glyphsByItem: glyphsByItem,
                     viewportHeight: viewportSize.height
                 )
                 description = try makeViewDescription(
                     view: view,
-                    frame: frame,
+                    fullSize: size,
+                    displayFrame: frame,
                     viewportSize: viewportSize,
                     contentScale: scale,
                     sequence: descriptions.count,
@@ -338,6 +333,7 @@ enum AnimationAtlasBuilder {
         itemIndex: Int,
         x: CGFloat,
         size: CGSize,
+        lineHeight: CGFloat,
         items: [MetalAnimationItem],
         glyphsByItem: [Int: [PositionedGlyph]],
         viewportHeight: CGFloat
@@ -349,12 +345,13 @@ enum AnimationAtlasBuilder {
         ) else {
             throw AnimationAtlasError.missingViewAnchor
         }
+        let displayHeight = min(size.height, lineHeight)
         // 实例空间 y 轴向上（原点在视口底部），view frame 的 y 轴向下。
         return CGRect(
             x: x,
-            y: viewportHeight - lineCenter - size.height / 2,
+            y: viewportHeight - lineCenter - displayHeight / 2,
             width: size.width,
-            height: size.height
+            height: displayHeight
         )
     }
 
@@ -394,41 +391,43 @@ enum AnimationAtlasBuilder {
 
     private static func makeViewDescription(
         view: UIView,
-        frame: CGRect,
+        fullSize: CGSize,
+        displayFrame: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat,
         sequence: Int,
         rasters: inout [RasterKey: Raster]
     ) throws -> Description {
-        guard frame.width > 0, frame.height > 0 else {
+        guard displayFrame.width > 0, displayFrame.height > 0 else {
             throw AnimationAtlasError.invalidViewFrame
         }
 
-        view.frame = frame
+        // 按完整尺寸布局，只快照顶部 displayFrame.height 的部分（超出行高时裁掉底部）。
+        view.frame = CGRect(origin: displayFrame.origin, size: fullSize)
         view.setNeedsLayout()
         view.layoutIfNeeded()
 
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = contentScale
         format.opaque = false
-        let snapshot = UIGraphicsImageRenderer(size: view.bounds.size, format: format).image {
+        let snapshot = UIGraphicsImageRenderer(size: displayFrame.size, format: format).image {
             view.layer.render(in: $0.cgContext)
         }
         guard let image = snapshot.cgImage else {
             throw AnimationAtlasError.cannotRasterizeView
         }
 
-        let key = RasterKey.image(ObjectIdentifier(view), frame.size)
+        let key = RasterKey.image(ObjectIdentifier(view), fullSize)
         if rasters[key] == nil {
-            rasters[key] = Raster(size: frame.size) { context, rect in
+            rasters[key] = Raster(size: displayFrame.size) { context, rect in
                 context.draw(image, in: rect)
             }
         }
         let bounds = CGRect(
-            x: frame.minX,
-            y: viewportSize.height - frame.maxY,
-            width: frame.width,
-            height: frame.height
+            x: displayFrame.minX,
+            y: viewportSize.height - displayFrame.maxY,
+            width: displayFrame.width,
+            height: displayFrame.height
         )
         return Description(
             key: key,

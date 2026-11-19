@@ -135,7 +135,7 @@ private enum DemoText {
             .text("汉"),
             .text("字"),
             .text(viewSpacing),
-            .staticView(staticViews[0], x: 60, size: CGSize(width: 56, height: 26)),
+            .staticView(staticViews[0], x: 60, size: CGSize(width: 56, height: 56)),
             .text("与"),
             .text(" Metal "),
             .text("一起"),
