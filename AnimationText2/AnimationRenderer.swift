@@ -12,7 +12,7 @@ struct AnimationUniforms {
     var atlasTexelSize: SIMD2<Float>
 }
 
-final class TextRenderer: NSObject {
+final class AnimationRenderer: NSObject {
     var onStats: ((PerformanceSnapshot) -> Void)?
     var onAnimationComplete: (() -> Void)?
 
@@ -20,7 +20,7 @@ final class TextRenderer: NSObject {
     private let commandQueue: MTLCommandQueue
     private let horizontalPipelineState: MTLRenderPipelineState
     private let verticalPipelineState: MTLRenderPipelineState
-    private var atlas: GlyphAtlas?
+    private var atlas: AnimationAtlas?
     private var instanceBuffer: MTLBuffer?
     private var horizontalTexture: MTLTexture?
     private var viewportSize = CGSize.zero
@@ -35,10 +35,10 @@ final class TextRenderer: NSObject {
         self.commandQueue = commandQueue
 
         guard let library = device.makeDefaultLibrary(),
-              let horizontalVertex = library.makeFunction(name: "horizontalTextVertex"),
-              let horizontalFragment = library.makeFunction(name: "textHorizontalFragment"),
-              let verticalVertex = library.makeFunction(name: "verticalTextVertex"),
-              let verticalFragment = library.makeFunction(name: "textVerticalFragment") else {
+              let horizontalVertex = library.makeFunction(name: "horizontalAnimationVertex"),
+              let horizontalFragment = library.makeFunction(name: "animationHorizontalFragment"),
+              let verticalVertex = library.makeFunction(name: "verticalAnimationVertex"),
+              let verticalFragment = library.makeFunction(name: "animationVerticalFragment") else {
             throw RendererError.shaderUnavailable
         }
 
@@ -56,8 +56,8 @@ final class TextRenderer: NSObject {
         verticalAttachment.isBlendingEnabled = true
         verticalAttachment.rgbBlendOperation = .add
         verticalAttachment.alphaBlendOperation = .add
-        verticalAttachment.sourceRGBBlendFactor = .sourceAlpha
-        verticalAttachment.sourceAlphaBlendFactor = .sourceAlpha
+        verticalAttachment.sourceRGBBlendFactor = .one
+        verticalAttachment.sourceAlphaBlendFactor = .one
         verticalAttachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
         verticalAttachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         verticalPipelineState = try device.makeRenderPipelineState(descriptor: verticalDescriptor)
@@ -65,24 +65,27 @@ final class TextRenderer: NSObject {
     }
 
     func layout(
-        text: String,
+        items: [MetalAnimationItem],
         font: UIFont,
+        textColor: UIColor,
         lineSpacing: CGFloat,
         maxBlur: Float,
         contentRect: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat
     ) throws {
-        let atlas = try GlyphAtlasBuilder.build(
-            text: text,
+        let atlas = try AnimationAtlasBuilder.build(
+            items: items,
             font: font,
+            textColor: textColor,
             lineSpacing: lineSpacing,
             maxBlur: maxBlur,
             contentRect: contentRect,
+            viewportSize: viewportSize,
             contentScale: contentScale,
             device: device
         )
-        let byteCount = atlas.instances.count * MemoryLayout<GlyphInstance>.stride
+        let byteCount = atlas.instances.count * MemoryLayout<AnimationInstance>.stride
         instanceBuffer = device.makeBuffer(
             bytes: atlas.instances,
             length: byteCount,
@@ -128,8 +131,8 @@ final class TextRenderer: NSObject {
 
         var uniforms = AnimationUniforms(
             time: elapsed,
-            duration: TextAnimation.duration,
-            travelDistance: TextAnimation.travelDistance,
+            duration: AnimationConfiguration.duration,
+            travelDistance: AnimationConfiguration.travelDistance,
             maxBlurInPixels: atlas.maxBlur * atlas.pixelsPerPoint,
             viewportSize: SIMD2(Float(viewportSize.width), Float(viewportSize.height)),
             atlasTexelSize: SIMD2(
@@ -183,7 +186,7 @@ final class TextRenderer: NSObject {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        if let snapshot = performanceMonitor.frameRendered(at: now, glyphCount: atlas.instances.count) {
+        if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: atlas.instances.count) {
             onStats?(snapshot)
         }
         if animationFinished {
@@ -191,7 +194,7 @@ final class TextRenderer: NSObject {
         }
     }
 
-    private func horizontalTexture(for atlas: GlyphAtlas) -> MTLTexture? {
+    private func horizontalTexture(for atlas: AnimationAtlas) -> MTLTexture? {
         let width = Int(atlas.blurAtlasSize.width)
         let height = Int(atlas.blurAtlasSize.height)
         if let horizontalTexture,

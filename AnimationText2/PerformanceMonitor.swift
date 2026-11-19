@@ -5,14 +5,14 @@ import QuartzCore
 public struct PerformanceSnapshot {
     public let processCPU: Double
     public let framesPerSecond: Double
-    public let glyphCount: Int
+    public let itemCount: Int
 }
 
 final class PerformanceMonitor {
     private var sampleStart = 0.0
     private var frameCount = 0
 
-    func frameRendered(at time: Double, glyphCount: Int) -> PerformanceSnapshot? {
+    func frameRendered(at time: Double, itemCount: Int) -> PerformanceSnapshot? {
         if sampleStart == 0 { sampleStart = time }
         frameCount += 1
 
@@ -21,7 +21,7 @@ final class PerformanceMonitor {
         let snapshot = PerformanceSnapshot(
             processCPU: ProcessCPUUsage.current(),
             framesPerSecond: Double(frameCount) / elapsed,
-            glyphCount: glyphCount
+            itemCount: itemCount
         )
         sampleStart = time
         frameCount = 0

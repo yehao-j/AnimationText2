@@ -19,6 +19,12 @@ final class ViewController: UIViewController {
             metalView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         self.metalView = metalView
+        metalView.lineSpacing = 8
+        metalView.items = DemoText.items(staticViews: [
+            makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
+            makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
+            makeStaticBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
+        ])
 
         configureHUD()
         metalView.onStats = { [weak self] snapshot in
@@ -27,22 +33,42 @@ final class ViewController: UIViewController {
                 snapshot.processCPU,
                 snapshot.framesPerSecond
             )
-            self?.detailLabel.text = "\(snapshot.glyphCount) 字 · 2 draw calls/帧 · 单核 = 100%"
+            self?.detailLabel.text = "\(snapshot.itemCount) 个动画单元 · 2 draw calls/帧 · 单核 = 100%"
         }
         metalView.onAnimationComplete = { [weak self] in
             self?.statsLabel.text = "动画已结束 · Metal 已暂停"
         }
         metalView.onError = { [weak self] message in
-            self?.showError(message)
+            self?.showError(title: "排版失败", message: message)
         }
         if let error = metalView.initializationError {
-            showError(error)
+            showError(title: "Metal 初始化失败", message: error)
         }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        metalView.layoutTextIfNeeded()
+        metalView.layoutItemsIfNeeded()
+    }
+
+    private func makeStaticBadge(title: String, color: UIColor) -> UIView {
+        let badge = UIView()
+        badge.backgroundColor = color
+        badge.layer.cornerRadius = 9
+        badge.layer.borderWidth = 1
+        badge.layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
+
+        let label = UILabel()
+        label.text = title
+        label.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        label.textColor = .white
+        label.translatesAutoresizingMaskIntoConstraints = false
+        badge.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: badge.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: badge.centerYAnchor)
+        ])
+        return badge
     }
 
     private func configureHUD() {
@@ -96,8 +122,55 @@ final class ViewController: UIViewController {
         metalView.replay()
     }
 
-    private func showError(_ message: String) {
-        statsLabel.text = "Metal 初始化失败"
+    private func showError(title: String, message: String) {
+        statsLabel.text = title
         detailLabel.text = message
+    }
+}
+
+private enum DemoText {
+    static func items(staticViews: [UIView]) -> [MetalAnimationItem] {
+        let viewSpacing = String(repeating: " ", count: 14)
+        var items: [MetalAnimationItem] = [
+            .text("汉"),
+            .text("字"),
+            .text(viewSpacing),
+            .staticView(staticViews[0], x: 60, size: CGSize(width: 56, height: 26)),
+            .text("与"),
+            .text(" Metal "),
+            .text("一起"),
+            .text(" Animation"),
+            .text("\n"),
+
+            .text("单"),
+            .text("词"),
+            .text(viewSpacing),
+            .staticView(staticViews[1], x: 60, size: CGSize(width: 56, height: 26)),
+            .text("夹在"),
+            .text(" Chinese "),
+            .text("和"),
+            .text(" UIKit "),
+            .text("中间"),
+            .text("\n"),
+
+            .text("静"),
+            .text("态"),
+            .text(viewSpacing),
+            .staticView(staticViews[2], x: 60, size: CGSize(width: 56, height: 26)),
+            .text("也能"),
+            .text("和"),
+            .text(" Text "),
+            .text("一起"),
+            .text("出现"),
+            .text("\n\n")
+        ]
+
+        let content = """
+        外部按汉字或单词拆分文本，内部保持整段排版，再依次播放入场动画。
+
+        文字、单词和静态快照共用位移、透明度与高斯模糊效果。
+        """
+        items.append(contentsOf: content.map { .text(String($0)) })
+        return items
     }
 }

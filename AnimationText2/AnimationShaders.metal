@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct GlyphInstance {
+struct AnimationInstance {
     float2 origin;
     float2 size;
     float2 uvOrigin;
@@ -30,80 +30,78 @@ struct VertexOut {
     float blurRadiusInPixels;
 };
 
-VertexOut animatedGlyphVertex(
-    const GlyphInstance glyph,
+VertexOut animatedInstanceVertex(
+    const AnimationInstance instance,
     const float2 corner,
     constant AnimationUniforms &uniforms
 ) {
-    const float rawProgress = (uniforms.time - glyph.delay) / uniforms.duration;
+    const float rawProgress = (uniforms.time - instance.delay) / uniforms.duration;
     const float progress = saturate(rawProgress);
 
     VertexOut out;
     out.uv = float2(0);
     out.uvMin = float2(0);
     out.uvMax = float2(0);
-    // Become visible quickly, then keep enough time for the blur-to-sharp transition.
     out.opacity = smoothstep(0.0, 0.16, progress);
     out.blurRadiusInPixels = uniforms.maxBlurInPixels * (1.0 - smoothstep(0.12, 1.0, progress));
 
-    // All six vertices coincide before this glyph starts, so it produces no fragments.
     out.position = float4(2, 2, 0, 1);
     if (rawProgress <= 0.0) {
         return out;
     }
 
     const float easedProgress = 1.0 - pow(1.0 - progress, 3.0);
-    float2 position = glyph.origin + corner * glyph.size;
+    float2 position = instance.origin + corner * instance.size;
     position.y -= (1.0 - easedProgress) * uniforms.travelDistance;
     out.position = float4(position / uniforms.viewportSize * 2.0 - 1.0, 0, 1);
     return out;
 }
 
-vertex VertexOut horizontalTextVertex(
+vertex VertexOut horizontalAnimationVertex(
     uint vertexID [[vertex_id]],
     uint instanceID [[instance_id]],
-    const device GlyphInstance *instances [[buffer(0)]],
+    const device AnimationInstance *instances [[buffer(0)]],
     constant AnimationUniforms &uniforms [[buffer(1)]]
 ) {
     const float2 corners[6] = {
         float2(0, 0), float2(1, 0), float2(0, 1),
         float2(0, 1), float2(1, 0), float2(1, 1)
     };
-    const GlyphInstance glyph = instances[instanceID];
+    const AnimationInstance instance = instances[instanceID];
     const float2 corner = corners[vertexID];
-    VertexOut out = animatedGlyphVertex(glyph, corner, uniforms);
-    out.uv = glyph.uvOrigin + float2(corner.x, 1.0 - corner.y) * glyph.uvSize;
-    out.uvMin = glyph.uvOrigin;
-    out.uvMax = glyph.uvOrigin + glyph.uvSize;
+    VertexOut out = animatedInstanceVertex(instance, corner, uniforms);
+    out.uv = instance.uvOrigin + float2(corner.x, 1.0 - corner.y) * instance.uvSize;
+    out.uvMin = instance.uvOrigin;
+    out.uvMax = instance.uvOrigin + instance.uvSize;
 
-    if (uniforms.time > glyph.delay) {
-        const float2 blurUV = glyph.blurUVOrigin
-            + float2(corner.x, 1.0 - corner.y) * glyph.blurUVSize;
+    if (uniforms.time > instance.delay) {
+        const float2 blurUV = instance.blurUVOrigin
+            + float2(corner.x, 1.0 - corner.y) * instance.blurUVSize;
         out.position = float4(blurUV.x * 2.0 - 1.0, 1.0 - blurUV.y * 2.0, 0, 1);
     }
     return out;
 }
 
-vertex VertexOut verticalTextVertex(
+vertex VertexOut verticalAnimationVertex(
     uint vertexID [[vertex_id]],
     uint instanceID [[instance_id]],
-    const device GlyphInstance *instances [[buffer(0)]],
+    const device AnimationInstance *instances [[buffer(0)]],
     constant AnimationUniforms &uniforms [[buffer(1)]]
 ) {
     const float2 corners[6] = {
         float2(0, 0), float2(1, 0), float2(0, 1),
         float2(0, 1), float2(1, 0), float2(1, 1)
     };
-    const GlyphInstance glyph = instances[instanceID];
+    const AnimationInstance instance = instances[instanceID];
     const float2 corner = corners[vertexID];
-    VertexOut out = animatedGlyphVertex(glyph, corner, uniforms);
-    out.uv = glyph.blurUVOrigin + float2(corner.x, 1.0 - corner.y) * glyph.blurUVSize;
-    out.uvMin = glyph.blurUVOrigin;
-    out.uvMax = glyph.blurUVOrigin + glyph.blurUVSize;
+    VertexOut out = animatedInstanceVertex(instance, corner, uniforms);
+    out.uv = instance.blurUVOrigin + float2(corner.x, 1.0 - corner.y) * instance.blurUVSize;
+    out.uvMin = instance.blurUVOrigin;
+    out.uvMax = instance.blurUVOrigin + instance.blurUVSize;
     return out;
 }
 
-float2 clampToGlyph(
+float2 clampToInstance(
     float2 uv,
     float2 uvMin,
     float2 uvMax,
@@ -137,53 +135,51 @@ float4 gaussianSample(
 
     float4 result = source.sample(
         sourceSampler,
-        clampToGlyph(uv, uvMin, uvMax, texelSize)
+        clampToInstance(uv, uvMin, uvMax, texelSize)
     ) * 0.0499767536;
     for (int index = 0; index < 12; index++) {
         const float2 offset = sampleStep * offsets[index];
         result += source.sample(
             sourceSampler,
-            clampToGlyph(uv + offset, uvMin, uvMax, texelSize)
+            clampToInstance(uv + offset, uvMin, uvMax, texelSize)
         ) * weights[index];
         result += source.sample(
             sourceSampler,
-            clampToGlyph(uv - offset, uvMin, uvMax, texelSize)
+            clampToInstance(uv - offset, uvMin, uvMax, texelSize)
         ) * weights[index];
     }
     return result;
 }
 
-fragment float4 textHorizontalFragment(
+fragment float4 animationHorizontalFragment(
     VertexOut in [[stage_in]],
-    texture2d<float> glyphAtlas [[texture(0)]],
+    texture2d<float> animationAtlas [[texture(0)]],
     constant AnimationUniforms &uniforms [[buffer(1)]]
 ) {
-    constexpr sampler glyphSampler(filter::linear, address::clamp_to_edge);
+    constexpr sampler atlasSampler(filter::linear, address::clamp_to_edge);
 
-    float coverage;
+    float4 color;
     if (in.blurRadiusInPixels < 0.02) {
-        const float2 uv = clampToGlyph(in.uv, in.uvMin, in.uvMax, uniforms.atlasTexelSize);
-        coverage = glyphAtlas.sample(glyphSampler, uv).a;
+        const float2 uv = clampToInstance(in.uv, in.uvMin, in.uvMax, uniforms.atlasTexelSize);
+        color = animationAtlas.sample(atlasSampler, uv);
     } else {
         const float2 sampleStep = float2(
             in.blurRadiusInPixels / 24.0 * uniforms.atlasTexelSize.x,
             0.0
         );
-        coverage = gaussianSample(
-            glyphAtlas,
-            glyphSampler,
+        color = gaussianSample(
+            animationAtlas,
+            atlasSampler,
             in.uv,
             sampleStep,
             in.uvMin,
             in.uvMax
-        ).a;
+        );
     }
-
-    const float visibleCoverage = coverage * in.opacity;
-    return float4(visibleCoverage, 0.0, 0.0, visibleCoverage);
+    return color * in.opacity;
 }
 
-fragment float4 textVerticalFragment(
+fragment float4 animationVerticalFragment(
     VertexOut in [[stage_in]],
     texture2d<float> horizontalAtlas [[texture(0)]]
 ) {
@@ -193,23 +189,21 @@ fragment float4 textVerticalFragment(
         horizontalAtlas.get_height()
     );
 
-    float coverage;
     if (in.blurRadiusInPixels < 0.02) {
-        const float2 uv = clampToGlyph(in.uv, in.uvMin, in.uvMax, texelSize);
-        coverage = horizontalAtlas.sample(blurSampler, uv).r;
-    } else {
-        const float2 sampleStep = float2(
-            0.0,
-            in.blurRadiusInPixels / 24.0 * texelSize.y
-        );
-        coverage = gaussianSample(
-            horizontalAtlas,
-            blurSampler,
-            in.uv,
-            sampleStep,
-            in.uvMin,
-            in.uvMax
-        ).r;
+        const float2 uv = clampToInstance(in.uv, in.uvMin, in.uvMax, texelSize);
+        return horizontalAtlas.sample(blurSampler, uv);
     }
-    return float4(0.09, 0.10, 0.11, coverage);
+
+    const float2 sampleStep = float2(
+        0.0,
+        in.blurRadiusInPixels / 24.0 * texelSize.y
+    );
+    return gaussianSample(
+        horizontalAtlas,
+        blurSampler,
+        in.uv,
+        sampleStep,
+        in.uvMin,
+        in.uvMax
+    );
 }
