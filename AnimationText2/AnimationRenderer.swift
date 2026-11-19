@@ -64,6 +64,7 @@ final class AnimationRenderer: NSObject {
         super.init()
     }
 
+    @discardableResult
     func layout(
         items: [MetalAnimationItem],
         font: UIFont,
@@ -73,7 +74,7 @@ final class AnimationRenderer: NSObject {
         contentRect: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat
-    ) throws {
+    ) throws -> [StandaloneViewLayout] {
         let atlas = try AnimationAtlasBuilder.build(
             items: items,
             font: font,
@@ -86,7 +87,7 @@ final class AnimationRenderer: NSObject {
             device: device
         )
         let byteCount = atlas.instances.count * MemoryLayout<AnimationInstance>.stride
-        instanceBuffer = device.makeBuffer(
+        instanceBuffer = byteCount == 0 ? nil : device.makeBuffer(
             bytes: atlas.instances,
             length: byteCount,
             options: .storageModeShared
@@ -94,16 +95,24 @@ final class AnimationRenderer: NSObject {
         self.atlas = atlas
         self.viewportSize = viewportSize
         replay()
+        return atlas.standaloneViewLayouts
     }
 
     func replay() {
-        startTime = CACurrentMediaTime() + 0.08
+        startTime = CACurrentMediaTime() + AnimationConfiguration.startDelay
     }
 
     func draw(in view: MTKView) {
-        guard let atlas,
-              let instanceBuffer,
-              !atlas.instances.isEmpty,
+        guard let atlas else { return }
+        let now = CACurrentMediaTime()
+        let rawElapsed = Float(max(0, now - startTime))
+        let animationFinished = rawElapsed >= atlas.animationDuration
+
+        if atlas.instances.isEmpty {
+            if animationFinished { onAnimationComplete?() }
+            return
+        }
+        guard let instanceBuffer,
               let renderPassDescriptor = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer(),
@@ -124,9 +133,6 @@ final class AnimationRenderer: NSObject {
             return
         }
 
-        let now = CACurrentMediaTime()
-        let rawElapsed = Float(max(0, now - startTime))
-        let animationFinished = rawElapsed >= atlas.animationDuration
         let elapsed = min(rawElapsed, atlas.animationDuration)
 
         var uniforms = AnimationUniforms(
@@ -186,7 +192,8 @@ final class AnimationRenderer: NSObject {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: atlas.instances.count) {
+        let itemCount = atlas.instances.count + atlas.standaloneViewLayouts.count
+        if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
             onStats?(snapshot)
         }
         if animationFinished {

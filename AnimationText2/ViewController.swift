@@ -20,11 +20,14 @@ final class ViewController: UIViewController {
         ])
         self.metalView = metalView
         metalView.lineSpacing = 8
-        metalView.items = DemoText.items(staticViews: [
-            makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
-            makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
-            makeStaticBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
-        ])
+        metalView.items = DemoText.items(
+            staticViews: [
+                makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
+                makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
+                makeStaticBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
+            ],
+            standaloneView: makeStandaloneView()
+        )
 
         configureHUD()
         metalView.onStats = { [weak self] snapshot in
@@ -69,6 +72,35 @@ final class ViewController: UIViewController {
             label.centerYAnchor.constraint(equalTo: badge.centerYAnchor)
         ])
         return badge
+    }
+
+    private func makeStandaloneView() -> UIView {
+        let container = UIView()
+        container.backgroundColor = UIColor(red: 0.16, green: 0.20, blue: 0.30, alpha: 1)
+        container.layer.cornerRadius = 12
+
+        let indicator = UIActivityIndicatorView(style: .medium)
+        indicator.color = .white
+        indicator.startAnimating()
+
+        let label = UILabel()
+        label.text = "原生 View 保留内部动画"
+        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.textColor = .white
+
+        let stack = UIStackView(arrangedSubviews: [indicator, label])
+        stack.axis = .horizontal
+        stack.spacing = 10
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -12)
+        ])
+        return container
     }
 
     private func configureHUD() {
@@ -129,7 +161,7 @@ final class ViewController: UIViewController {
 }
 
 private enum DemoText {
-    static func items(staticViews: [UIView]) -> [MetalAnimationItem] {
+    static func items(staticViews: [UIView], standaloneView: UIView) -> [MetalAnimationItem] {
         let viewSpacing = String(repeating: " ", count: 14)
         var items: [MetalAnimationItem] = [
             .text("汉"),
@@ -140,7 +172,7 @@ private enum DemoText {
             .text(" Metal "),
             .text("一起"),
             .text(" Animation"),
-            .text("\n"),
+            .standaloneView(standaloneView, size: CGSize(width: 260, height: 64), alignment: .left),
 
             .text("单"),
             .text("词"),

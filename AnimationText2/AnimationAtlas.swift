@@ -7,6 +7,7 @@ struct AnimationConfiguration {
     static let duration: Float = 0.22
     /// 相邻动画单元开始动画的时间间隔，单位为秒。
     static let stagger: Float = 0.03
+    static let startDelay: TimeInterval = 0.08
     /// 动画单元在开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 16
     static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
@@ -25,9 +26,16 @@ struct AnimationInstance {
     private let padding: Float = 0
 }
 
+struct StandaloneViewLayout {
+    let view: UIView
+    let frame: CGRect
+    let delay: Float
+}
+
 struct AnimationAtlas {
     let texture: MTLTexture
     let instances: [AnimationInstance]
+    let standaloneViewLayouts: [StandaloneViewLayout]
     let blurAtlasSize: CGSize
     let animationDuration: Float
     let pixelsPerPoint: Float
@@ -58,6 +66,16 @@ enum AnimationAtlasBuilder {
     private struct TextItem {
         let itemIndex: Int
         let range: NSRange
+    }
+
+    private struct TextLayout {
+        var glyphsByItem: [Int: [PositionedGlyph]] = [:]
+        var standaloneFrames: [Int: CGRect] = [:]
+    }
+
+    private struct TextSegment {
+        let glyphsByItem: [Int: [PositionedGlyph]]
+        let height: CGFloat
     }
 
     private struct PositionedGlyph {
@@ -103,15 +121,18 @@ enum AnimationAtlasBuilder {
     ) throws -> AnimationAtlas {
         let maxBlur = max(0, maxBlur)
         let scale = max(1, contentScale)
-        let glyphsByItem = layoutText(
+        let textLayout = layoutText(
             items: items,
             font: font,
             textColor: textColor,
             lineSpacing: lineSpacing,
-            contentRect: contentRect
+            contentRect: contentRect,
+            viewportSize: viewportSize
         )
+        let glyphsByItem = textLayout.glyphsByItem
 
         var descriptions: [Description] = []
+        var standaloneViewLayouts: [StandaloneViewLayout] = []
         var rasters: [RasterKey: Raster] = [:]
 
         for (itemIndex, item) in items.enumerated() {
@@ -122,7 +143,7 @@ enum AnimationAtlasBuilder {
                     text: text,
                     textColor: textColor,
                     glyphs: glyphsByItem[itemIndex] ?? [],
-                    sequence: descriptions.count,
+                    sequence: descriptions.count + standaloneViewLayouts.count,
                     rasters: &rasters
                 )
             case .staticView(let view, let x, let size):
@@ -141,9 +162,17 @@ enum AnimationAtlasBuilder {
                     displayFrame: frame,
                     viewportSize: viewportSize,
                     contentScale: scale,
-                    sequence: descriptions.count,
+                    sequence: descriptions.count + standaloneViewLayouts.count,
                     rasters: &rasters
                 )
+            case .standaloneView(let view, _, _):
+                description = nil
+                standaloneViewLayouts.append(StandaloneViewLayout(
+                    view: view,
+                    frame: textLayout.standaloneFrames[itemIndex]!,
+                    delay: Float(descriptions.count + standaloneViewLayouts.count)
+                        * AnimationConfiguration.stagger
+                ))
             }
             if let description {
                 descriptions.append(description)
@@ -152,6 +181,7 @@ enum AnimationAtlasBuilder {
 
         return try makeAtlas(
             descriptions: descriptions,
+            standaloneViewLayouts: standaloneViewLayouts,
             rasters: rasters,
             maxBlur: maxBlur,
             contentScale: scale,
@@ -164,14 +194,74 @@ enum AnimationAtlasBuilder {
         font: UIFont,
         textColor: UIColor,
         lineSpacing: CGFloat,
-        contentRect: CGRect
-    ) -> [Int: [PositionedGlyph]] {
+        contentRect: CGRect,
+        viewportSize: CGSize
+    ) -> TextLayout {
+        var layout = TextLayout()
+        var cursorY = contentRect.maxY
+        var index = 0
+
+        while index < items.count {
+            if case .standaloneView(_, let size, let alignment) = items[index] {
+                let width = min(max(0, size.width), viewportSize.width)
+                let height = max(0, size.height)
+                let x: CGFloat
+                switch alignment {
+                case .left:
+                    x = 0
+                case .center:
+                    x = (viewportSize.width - width) / 2
+                case .right:
+                    x = viewportSize.width - width
+                }
+                layout.standaloneFrames[index] = CGRect(
+                    x: x,
+                    y: viewportSize.height - cursorY,
+                    width: width,
+                    height: height
+                )
+                cursorY -= height
+                index += 1
+                continue
+            }
+
+            let segmentStart = index
+            while index < items.count {
+                if case .standaloneView = items[index] { break }
+                index += 1
+            }
+            let segment = layoutTextSegment(
+                items: items,
+                range: segmentStart..<index,
+                font: font,
+                textColor: textColor,
+                lineSpacing: lineSpacing,
+                contentRect: contentRect,
+                top: cursorY
+            )
+            for (itemIndex, glyphs) in segment.glyphsByItem {
+                layout.glyphsByItem[itemIndex, default: []].append(contentsOf: glyphs)
+            }
+            cursorY -= segment.height
+        }
+        return layout
+    }
+
+    private static func layoutTextSegment(
+        items: [MetalAnimationItem],
+        range: Range<Int>,
+        font: UIFont,
+        textColor: UIColor,
+        lineSpacing: CGFloat,
+        contentRect: CGRect,
+        top: CGFloat
+    ) -> TextSegment {
         var fullText = ""
         var textItems: [TextItem] = []
         var location = 0
 
-        for (itemIndex, item) in items.enumerated() {
-            guard case .text(let text) = item else { continue }
+        for itemIndex in range {
+            guard case .text(let text) = items[itemIndex] else { continue }
             let length = text.utf16.count
             textItems.append(TextItem(
                 itemIndex: itemIndex,
@@ -181,7 +271,9 @@ enum AnimationAtlasBuilder {
             location += length
         }
 
-        guard !fullText.isEmpty else { return [:] }
+        guard !fullText.isEmpty else {
+            return TextSegment(glyphsByItem: [:], height: 0)
+        }
 
         let lineHeight = font.lineHeight + lineSpacing
         let paragraphStyle = NSMutableParagraphStyle()
@@ -199,56 +291,73 @@ enum AnimationAtlasBuilder {
             ]
         )
         let framesetter = CTFramesetterCreateWithAttributedString(attributedText)
-        let path = CGPath(rect: contentRect, transform: nil)
-        let frame = CTFramesetterCreateFrame(
+        let suggestedSize = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter,
             CFRange(location: 0, length: attributedText.length),
-            path,
+            nil,
+            CGSize(width: contentRect.width, height: CGFloat.greatestFiniteMagnitude),
             nil
         )
-
-        let lines = CTFrameGetLines(frame) as! [CTLine]
-        var lineOrigins = [CGPoint](repeating: .zero, count: lines.count)
-        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &lineOrigins)
+        let textHeight = ceil(suggestedSize.height)
+        let visibleHeight = min(textHeight, max(0, top - contentRect.minY))
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
 
-        for (lineIndex, line) in lines.enumerated() {
-            let runs = CTLineGetGlyphRuns(line) as! [CTRun]
-            for run in runs {
-                let attributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any]
-                let runUIFont = attributes?[.font] as? UIFont ?? font
-                let runFont = runUIFont as CTFont
-                let glyphCount = CTRunGetGlyphCount(run)
-                var glyphs = [CGGlyph](repeating: 0, count: glyphCount)
-                var positions = [CGPoint](repeating: .zero, count: glyphCount)
-                var stringIndices = [CFIndex](repeating: 0, count: glyphCount)
-                CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
-                CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
-                CTRunGetStringIndices(run, CFRange(location: 0, length: 0), &stringIndices)
+        if visibleHeight > 0 {
+            let frameRect = CGRect(
+                x: contentRect.minX,
+                y: top - visibleHeight,
+                width: contentRect.width,
+                height: visibleHeight
+            )
+            let path = CGPath(rect: frameRect, transform: nil)
+            let frame = CTFramesetterCreateFrame(
+                framesetter,
+                CFRange(location: 0, length: attributedText.length),
+                path,
+                nil
+            )
+            let lines = CTFrameGetLines(frame) as! [CTLine]
+            var lineOrigins = [CGPoint](repeating: .zero, count: lines.count)
+            CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &lineOrigins)
 
-                for index in 0..<glyphCount {
-                    guard let textItem = textItem(at: stringIndices[index], in: textItems) else {
-                        continue
+            for (lineIndex, line) in lines.enumerated() {
+                let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+                for run in runs {
+                    let attributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any]
+                    let runUIFont = attributes?[.font] as? UIFont ?? font
+                    let runFont = runUIFont as CTFont
+                    let glyphCount = CTRunGetGlyphCount(run)
+                    var glyphs = [CGGlyph](repeating: 0, count: glyphCount)
+                    var positions = [CGPoint](repeating: .zero, count: glyphCount)
+                    var stringIndices = [CFIndex](repeating: 0, count: glyphCount)
+                    CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+                    CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+                    CTRunGetStringIndices(run, CFRange(location: 0, length: 0), &stringIndices)
+
+                    for index in 0..<glyphCount {
+                        guard let textItem = textItem(at: stringIndices[index], in: textItems) else {
+                            continue
+                        }
+                        var localBounds = CGRect.zero
+                        var glyph = glyphs[index]
+                        CTFontGetBoundingRectsForGlyphs(runFont, .default, &glyph, &localBounds, 1)
+                        guard localBounds.width > 0, localBounds.height > 0 else { continue }
+
+                        let baseline = CGPoint(
+                            x: frameRect.minX + lineOrigins[lineIndex].x + positions[index].x,
+                            y: frameRect.minY + lineOrigins[lineIndex].y + positions[index].y
+                        )
+                        glyphsByItem[textItem.itemIndex, default: []].append(PositionedGlyph(
+                            glyph: glyph,
+                            font: runFont,
+                            baseline: baseline,
+                            localBounds: localBounds
+                        ))
                     }
-                    var localBounds = CGRect.zero
-                    var glyph = glyphs[index]
-                    CTFontGetBoundingRectsForGlyphs(runFont, .default, &glyph, &localBounds, 1)
-                    guard localBounds.width > 0, localBounds.height > 0 else { continue }
-
-                    let baseline = CGPoint(
-                        x: contentRect.minX + lineOrigins[lineIndex].x + positions[index].x,
-                        y: contentRect.minY + lineOrigins[lineIndex].y + positions[index].y
-                    )
-                    glyphsByItem[textItem.itemIndex, default: []].append(PositionedGlyph(
-                        glyph: glyph,
-                        font: runFont,
-                        baseline: baseline,
-                        localBounds: localBounds
-                    ))
                 }
             }
         }
-        return glyphsByItem
+        return TextSegment(glyphsByItem: glyphsByItem, height: textHeight)
     }
 
     private static func textItem(at stringIndex: Int, in items: [TextItem]) -> TextItem? {
@@ -438,6 +547,7 @@ enum AnimationAtlasBuilder {
 
     private static func makeAtlas(
         descriptions: [Description],
+        standaloneViewLayouts: [StandaloneViewLayout],
         rasters: [RasterKey: Raster],
         maxBlur: Float,
         contentScale: CGFloat,
@@ -569,11 +679,13 @@ enum AnimationAtlasBuilder {
             )
         }
 
-        let animationDuration = descriptions.isEmpty ? 0 : Float(descriptions.count - 1)
+        let itemCount = descriptions.count + standaloneViewLayouts.count
+        let animationDuration = itemCount == 0 ? 0 : Float(itemCount - 1)
             * AnimationConfiguration.stagger + AnimationConfiguration.duration
         return AnimationAtlas(
             texture: texture,
             instances: instances,
+            standaloneViewLayouts: standaloneViewLayouts,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
             pixelsPerPoint: Float(contentScale),

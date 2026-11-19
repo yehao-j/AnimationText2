@@ -1,10 +1,22 @@
 import MetalKit
 import UIKit
 
+public enum MetalStandaloneViewAlignment {
+    case left
+    case center
+    case right
+}
+
 public enum MetalAnimationItem {
     case text(String)
     /// 垂直位置自动与相邻文本行的墨迹中心对齐，x 与 size 只决定水平位置和尺寸；高度超过行高时只显示顶部行高部分。
     case staticView(UIView, x: CGFloat, size: CGSize)
+    /// 原生 View 独占一行并按 alignment 对齐，宽度夹紧到 MetalTextView 宽度；保留内部动画，仅执行上移动画。
+    case standaloneView(
+        UIView,
+        size: CGSize,
+        alignment: MetalStandaloneViewAlignment = .center
+    )
 }
 
 public final class MetalTextView: MTKView, MTKViewDelegate {
@@ -34,6 +46,10 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private var renderer: AnimationRenderer?
     private var lastContentRect = CGRect.null
     private var lastContentScale: CGFloat = 0
+    private var standaloneViewLayouts: [StandaloneViewLayout] = []
+    private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
+    private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
+    private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
 
     public override init(frame frameRect: CGRect, device: MTLDevice?) {
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
@@ -43,6 +59,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             return
         }
         colorPixelFormat = .bgra8Unorm
+        clipsToBounds = true
         clearColor = MTLClearColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         framebufferOnly = true
         enableSetNeedsDisplay = false
@@ -85,7 +102,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
         guard contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
 
         do {
-            try renderer.layout(
+            standaloneViewLayouts = try renderer.layout(
                 items: items,
                 font: font,
                 textColor: textColor,
@@ -95,6 +112,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 viewportSize: bounds.size,
                 contentScale: contentScaleFactor
             )
+            layoutStandaloneViews()
             lastContentRect = contentRect
             lastContentScale = contentScaleFactor
             isPaused = false
@@ -106,7 +124,72 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     public func replay() {
         guard let renderer else { return }
         renderer.replay()
+        replayStandaloneViews()
         isPaused = false
+    }
+
+    private func layoutStandaloneViews() {
+        let validIdentifiers = Set(standaloneViewLayouts.map { ObjectIdentifier($0.view) })
+        let staleIdentifiers = standaloneContainers.keys.filter { !validIdentifiers.contains($0) }
+        for identifier in staleIdentifiers {
+            standaloneStartWorkItems[identifier]?.cancel()
+            standaloneAnimators[identifier]?.stopAnimation(true)
+            standaloneContainers[identifier]?.removeFromSuperview()
+            standaloneContainers.removeValue(forKey: identifier)
+            standaloneAnimators.removeValue(forKey: identifier)
+            standaloneStartWorkItems.removeValue(forKey: identifier)
+        }
+
+        for layout in standaloneViewLayouts {
+            let identifier = ObjectIdentifier(layout.view)
+            let container: UIView
+            if let existingContainer = standaloneContainers[identifier] {
+                container = existingContainer
+            } else {
+                container = UIView()
+                container.isHidden = true
+                container.addSubview(layout.view)
+                addSubview(container)
+                standaloneContainers[identifier] = container
+            }
+            standaloneStartWorkItems[identifier]?.cancel()
+            standaloneAnimators[identifier]?.stopAnimation(true)
+            container.transform = .identity
+            container.frame = layout.frame
+            layout.view.bounds.size = container.bounds.size
+            layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+            layout.view.setNeedsLayout()
+            layout.view.layoutIfNeeded()
+        }
+        replayStandaloneViews()
+    }
+
+    private func replayStandaloneViews() {
+        for layout in standaloneViewLayouts {
+            let identifier = ObjectIdentifier(layout.view)
+            guard let container = standaloneContainers[identifier] else { continue }
+            standaloneStartWorkItems[identifier]?.cancel()
+            standaloneAnimators[identifier]?.stopAnimation(true)
+            container.isHidden = true
+            container.transform = CGAffineTransform(
+                translationX: 0,
+                y: CGFloat(AnimationConfiguration.travelDistance)
+            )
+            let animator = UIViewPropertyAnimator(
+                duration: TimeInterval(AnimationConfiguration.duration),
+                curve: .easeOut
+            ) {
+                container.transform = .identity
+            }
+            let startWorkItem = DispatchWorkItem {
+                container.isHidden = false
+                animator.startAnimation()
+            }
+            standaloneAnimators[identifier] = animator
+            standaloneStartWorkItems[identifier] = startWorkItem
+            let delay = AnimationConfiguration.startDelay + TimeInterval(layout.delay)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: startWorkItem)
+        }
     }
 
     private func invalidateContentLayout() {
