@@ -8,10 +8,10 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     public private(set) var initializationError: String?
 
     /// 行高 = font.lineHeight + lineSpacing。修改任一配置都会重新排版并重建图集。
-    public var font = UIFont.systemFont(ofSize: 17, weight: .regular) {
+    public var font = TextAnimation.font {
         didSet { invalidateTextLayout() }
     }
-    public var lineSpacing: CGFloat = 7 {
+    public var lineSpacing: CGFloat = TextAnimation.lineSpacing {
         didSet { invalidateTextLayout() }
     }
     /// 最大模糊半径（pt）。0 表示无模糊。

@@ -2,10 +2,19 @@ import CoreText
 import Metal
 import UIKit
 
-enum TextAnimation {
-    static let duration: Float = 0.42
-    static let stagger: Float = 0.026
+struct TextAnimation {
+    /// 单个字符的动画时长，单位为秒。
+    static let duration: Float = 0.22
+    /// 相邻字符开始动画的时间间隔，单位为秒。
+    static let stagger: Float = 0.03
+    /// 字符在动画开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 16
+    /// 动画文本使用的字体。
+    static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
+    /// 字符之间的额外间距，单位为点。
+    static let letterSpacing: CGFloat = 0
+    /// 相邻文本行之间的额外间距，单位为点。
+    static let lineSpacing: CGFloat = 0
 }
 
 struct GlyphInstance {
@@ -75,6 +84,7 @@ enum GlyphAtlasBuilder {
             string: text,
             attributes: [
                 .font: font,
+                .kern: TextAnimation.letterSpacing,
                 .foregroundColor: UIColor.white,
                 .paragraphStyle: paragraphStyle
             ]

@@ -49,7 +49,7 @@ final class TextRenderer: NSObject {
         let horizontalAttachment = horizontalDescriptor.colorAttachments[0]!
         horizontalAttachment.isBlendingEnabled = true
         horizontalAttachment.rgbBlendOperation = .max
-        horizontalAttachment.alphaBlendOperation = .max
+        horizontalAttachment.alphaBlendOperation = .min
         horizontalPipelineState = try device.makeRenderPipelineState(descriptor: horizontalDescriptor)
 
         let verticalDescriptor = MTLRenderPipelineDescriptor()
@@ -117,7 +117,7 @@ final class TextRenderer: NSObject {
         horizontalPass.colorAttachments[0].loadAction = .clear
         horizontalPass.colorAttachments[0].storeAction = .store
         horizontalPass.colorAttachments[0].clearColor = MTLClearColor(
-            red: 0, green: 0, blue: 0, alpha: 0
+            red: 0, green: 0, blue: 0, alpha: 1
         )
         guard let horizontalEncoder = commandBuffer.makeRenderCommandEncoder(
             descriptor: horizontalPass

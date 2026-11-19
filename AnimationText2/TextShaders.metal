@@ -110,8 +110,8 @@ fragment float4 textHorizontalFragment(
     const float normalizedRadius = uniforms.maxBlurInPixels > 0.0
         ? in.blurRadiusInPixels / uniforms.maxBlurInPixels
         : 0.0;
-    // Max blending preserves both the text union and each quad's blur radius.
-    return float4(visibleCoverage, normalizedRadius, 0.0, visibleCoverage);
+    // Min blending keeps sharp glyphs from inheriting a neighboring glyph's blur.
+    return float4(visibleCoverage, 0.0, 0.0, normalizedRadius);
 }
 
 struct FullscreenVertexOut {
@@ -142,7 +142,7 @@ fragment float4 textVerticalFragment(
         horizontalTexture.get_height()
     );
     const float4 center = horizontalTexture.sample(blurSampler, in.uv);
-    const float blurRadius = center.g * uniforms.maxBlurInPixels;
+    const float blurRadius = center.a * uniforms.maxBlurInPixels;
 
     float coverage;
     if (blurRadius < 0.02) {
