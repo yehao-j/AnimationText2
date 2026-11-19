@@ -22,6 +22,8 @@ struct GlyphInstance {
     let size: SIMD2<Float>
     let uvOrigin: SIMD2<Float>
     let uvSize: SIMD2<Float>
+    let blurUVOrigin: SIMD2<Float>
+    let blurUVSize: SIMD2<Float>
     let delay: Float
     private let padding: Float = 0
 }
@@ -29,6 +31,7 @@ struct GlyphInstance {
 struct GlyphAtlas {
     let texture: MTLTexture
     let instances: [GlyphInstance]
+    let blurAtlasSize: CGSize
     let animationDuration: Float
     let pixelsPerPoint: Float
     let maxBlur: Float
@@ -221,9 +224,31 @@ enum GlyphAtlasBuilder {
             bytesPerRow: atlasWidth * 4
         )
 
+        let blurAtlasWidth = atlasWidth
+        var blurX = 0
+        var blurY = 0
+        var blurRowHeight = 0
+        let blurPixelRects = descriptions.map { description -> CGRect in
+            let pixelRect = pixelRectsByKey[description.key]!
+            let width = Int(pixelRect.width)
+            let height = Int(pixelRect.height)
+            if blurX + width > blurAtlasWidth {
+                blurX = 0
+                blurY += blurRowHeight
+                blurRowHeight = 0
+            }
+            let blurPixelRect = CGRect(x: blurX, y: blurY, width: width, height: height)
+            blurX += width
+            blurRowHeight = max(blurRowHeight, height)
+            return blurPixelRect
+        }
+        let blurAtlasHeight = max(1, blurY + blurRowHeight)
+        guard blurAtlasHeight <= 16_384 else { throw GlyphAtlasError.atlasOverflow }
+
         let paddingInPoints = CGFloat(paddingInPixels) / scale
-        let instances = descriptions.compactMap { description -> GlyphInstance? in
-            guard let pixelRect = pixelRectsByKey[description.key] else { return nil }
+        let instances = descriptions.enumerated().map { index, description in
+            let pixelRect = pixelRectsByKey[description.key]!
+            let blurPixelRect = blurPixelRects[index]
             let absoluteOrigin = CGPoint(
                 x: description.baseline.x + description.localBounds.minX - paddingInPoints,
                 y: description.baseline.y + description.localBounds.minY - paddingInPoints
@@ -243,6 +268,14 @@ enum GlyphAtlasBuilder {
                     Float(pixelRect.width / CGFloat(atlasWidth)),
                     Float(pixelRect.height / CGFloat(atlasHeight))
                 ),
+                blurUVOrigin: SIMD2(
+                    Float(blurPixelRect.minX / CGFloat(blurAtlasWidth)),
+                    Float((CGFloat(blurAtlasHeight) - blurPixelRect.maxY) / CGFloat(blurAtlasHeight))
+                ),
+                blurUVSize: SIMD2(
+                    Float(blurPixelRect.width / CGFloat(blurAtlasWidth)),
+                    Float(blurPixelRect.height / CGFloat(blurAtlasHeight))
+                ),
                 delay: description.delay
             )
         }
@@ -251,6 +284,7 @@ enum GlyphAtlasBuilder {
         return GlyphAtlas(
             texture: texture,
             instances: instances,
+            blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
             pixelsPerPoint: Float(scale),
             maxBlur: maxBlur

@@ -35,25 +35,21 @@ final class TextRenderer: NSObject {
         self.commandQueue = commandQueue
 
         guard let library = device.makeDefaultLibrary(),
-              let textVertex = library.makeFunction(name: "textVertex"),
+              let horizontalVertex = library.makeFunction(name: "horizontalTextVertex"),
               let horizontalFragment = library.makeFunction(name: "textHorizontalFragment"),
-              let fullscreenVertex = library.makeFunction(name: "fullscreenVertex"),
+              let verticalVertex = library.makeFunction(name: "verticalTextVertex"),
               let verticalFragment = library.makeFunction(name: "textVerticalFragment") else {
             throw RendererError.shaderUnavailable
         }
 
         let horizontalDescriptor = MTLRenderPipelineDescriptor()
-        horizontalDescriptor.vertexFunction = textVertex
+        horizontalDescriptor.vertexFunction = horizontalVertex
         horizontalDescriptor.fragmentFunction = horizontalFragment
         horizontalDescriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
-        let horizontalAttachment = horizontalDescriptor.colorAttachments[0]!
-        horizontalAttachment.isBlendingEnabled = true
-        horizontalAttachment.rgbBlendOperation = .max
-        horizontalAttachment.alphaBlendOperation = .min
         horizontalPipelineState = try device.makeRenderPipelineState(descriptor: horizontalDescriptor)
 
         let verticalDescriptor = MTLRenderPipelineDescriptor()
-        verticalDescriptor.vertexFunction = fullscreenVertex
+        verticalDescriptor.vertexFunction = verticalVertex
         verticalDescriptor.fragmentFunction = verticalFragment
         verticalDescriptor.colorAttachments[0].pixelFormat = pixelFormat
         let verticalAttachment = verticalDescriptor.colorAttachments[0]!
@@ -108,7 +104,7 @@ final class TextRenderer: NSObject {
               let renderPassDescriptor = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let commandBuffer = commandQueue.makeCommandBuffer(),
-              let horizontalTexture = horizontalTexture(for: drawable.texture) else {
+              let horizontalTexture = horizontalTexture(for: atlas) else {
             return
         }
 
@@ -117,7 +113,7 @@ final class TextRenderer: NSObject {
         horizontalPass.colorAttachments[0].loadAction = .clear
         horizontalPass.colorAttachments[0].storeAction = .store
         horizontalPass.colorAttachments[0].clearColor = MTLClearColor(
-            red: 0, green: 0, blue: 0, alpha: 1
+            red: 0, green: 0, blue: 0, alpha: 0
         )
         guard let horizontalEncoder = commandBuffer.makeRenderCommandEncoder(
             descriptor: horizontalPass
@@ -169,13 +165,19 @@ final class TextRenderer: NSObject {
             return
         }
         verticalEncoder.setRenderPipelineState(verticalPipelineState)
-        verticalEncoder.setFragmentBytes(
+        verticalEncoder.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
+        verticalEncoder.setVertexBytes(
             &uniforms,
             length: MemoryLayout<AnimationUniforms>.stride,
             index: 1
         )
         verticalEncoder.setFragmentTexture(horizontalTexture, index: 0)
-        verticalEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        verticalEncoder.drawPrimitives(
+            type: .triangle,
+            vertexStart: 0,
+            vertexCount: 6,
+            instanceCount: atlas.instances.count
+        )
         verticalEncoder.endEncoding()
 
         commandBuffer.present(drawable)
@@ -189,17 +191,19 @@ final class TextRenderer: NSObject {
         }
     }
 
-    private func horizontalTexture(for drawable: MTLTexture) -> MTLTexture? {
+    private func horizontalTexture(for atlas: GlyphAtlas) -> MTLTexture? {
+        let width = Int(atlas.blurAtlasSize.width)
+        let height = Int(atlas.blurAtlasSize.height)
         if let horizontalTexture,
-           horizontalTexture.width == drawable.width,
-           horizontalTexture.height == drawable.height {
+           horizontalTexture.width == width,
+           horizontalTexture.height == height {
             return horizontalTexture
         }
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
-            width: drawable.width,
-            height: drawable.height,
+            width: width,
+            height: height,
             mipmapped: false
         )
         descriptor.usage = [.renderTarget, .shaderRead]
