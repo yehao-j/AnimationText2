@@ -25,6 +25,9 @@ final class AnimationRenderer: NSObject {
     private var horizontalTexture: MTLTexture?
     private var viewportSize = CGSize.zero
     private var startTime = CACurrentMediaTime() + 0.15
+    /// 当前动画时间轴的起点，供 standalone view 把 delay 换算成实际等待时长。
+    var timelineStartTime: CFTimeInterval { startTime }
+    var debugInstanceCount: Int { atlas?.instances.count ?? 0 }
     private var performanceMonitor = PerformanceMonitor()
 
     init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
@@ -73,8 +76,12 @@ final class AnimationRenderer: NSObject {
         maxBlur: Float,
         contentRect: CGRect,
         viewportSize: CGSize,
-        contentScale: CGFloat
+        contentScale: CGFloat,
+        preservingTimeline: Bool
     ) throws -> [StandaloneViewLayout] {
+        // 流式追加：保留 startTime 与旧实例的 delay，旧内容保持最终态不重播，
+        // 新实例从当前已播时间（或队尾）接续。
+        let elapsed = preservingTimeline ? Float(max(0, CACurrentMediaTime() - startTime)) : 0
         let atlas = try AnimationAtlasBuilder.build(
             items: items,
             font: font,
@@ -84,6 +91,8 @@ final class AnimationRenderer: NSObject {
             contentRect: contentRect,
             viewportSize: viewportSize,
             contentScale: contentScale,
+            existingDelays: preservingTimeline ? atlas?.sequenceDelays ?? [] : [],
+            elapsed: elapsed,
             device: device
         )
         let byteCount = atlas.instances.count * MemoryLayout<AnimationInstance>.stride
@@ -94,7 +103,7 @@ final class AnimationRenderer: NSObject {
         )
         self.atlas = atlas
         self.viewportSize = viewportSize
-        replay()
+        if !preservingTimeline { replay() }
         return atlas.standaloneViewLayouts
     }
 

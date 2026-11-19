@@ -4,6 +4,8 @@ final class ViewController: UIViewController {
     private var metalView: MetalTextView!
     private let statsLabel = UILabel()
     private let detailLabel = UILabel()
+    private var streamingBatches: [[MetalAnimationItem]] = []
+    private var streamingWorkItem: DispatchWorkItem?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -20,7 +22,7 @@ final class ViewController: UIViewController {
         ])
         self.metalView = metalView
         metalView.lineSpacing = 8
-        metalView.items = DemoText.items(
+        streamingBatches = DemoText.streamingBatches(
             staticViews: [
                 makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
                 makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
@@ -47,11 +49,32 @@ final class ViewController: UIViewController {
         if let error = metalView.initializationError {
             showError(title: "Metal 初始化失败", message: error)
         }
+        startStreaming()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         metalView.layoutItemsIfNeeded()
+    }
+
+    private func startStreaming() {
+        streamingWorkItem?.cancel()
+        guard let firstBatch = streamingBatches.first else { return }
+        metalView.items = firstBatch
+        streamBatch(at: 1)
+    }
+
+    private func streamBatch(at index: Int) {
+        guard index < streamingBatches.count else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.metalView.append(items: self.streamingBatches[index])
+            self.streamBatch(at: index + 1)
+        }
+        streamingWorkItem = workItem
+        // 随机推送间隔模拟 SSE 网络分片，偶发长延迟模拟网络卡顿。
+        let delay = Double.random(in: 1...20) == 1 ? 0.6 : Double.random(in: 0.04...0.14)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func makeStaticBadge(title: String, color: UIColor) -> UIView {
@@ -151,7 +174,7 @@ final class ViewController: UIViewController {
 
     @objc private func replay() {
         statsLabel.text = "进程 CPU  采样中…"
-        metalView.replay()
+        startStreaming()
     }
 
     private func showError(title: String, message: String) {
@@ -161,9 +184,10 @@ final class ViewController: UIViewController {
 }
 
 private enum DemoText {
-    static func items(staticViews: [UIView], standaloneView: UIView) -> [MetalAnimationItem] {
+    /// 第一批是静态 View 前缀；正文在外部拆分后按 token 边界随机分成小批次，模拟 SSE 分片推送。
+    static func streamingBatches(staticViews: [UIView], standaloneView: UIView) -> [[MetalAnimationItem]] {
         let viewSpacing = String(repeating: " ", count: 14)
-        var items: [MetalAnimationItem] = [
+        let prefix: [MetalAnimationItem] = [
             .text("汉"),
             .text("字"),
             .text(viewSpacing),
@@ -201,8 +225,16 @@ private enum DemoText {
         外部按汉字或单词拆分文本，内部保持整段排版，再依次播放入场动画。
 
         文字、单词和静态快照共用位移、透明度与高斯模糊效果。
+        Streaming tokens arrive over SSE, and each word animates as it lands.
         """
-        items.append(contentsOf: content.map { .text(String($0)) })
-        return items
+        let bodyItems = MetalAnimationItem.tokenize(content)
+        var batches = [prefix]
+        var index = 0
+        while index < bodyItems.count {
+            let count = Int.random(in: 1...3)
+            batches.append(Array(bodyItems[index..<min(index + count, bodyItems.count)]))
+            index += count
+        }
+        return batches
     }
 }

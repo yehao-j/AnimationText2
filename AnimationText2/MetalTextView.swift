@@ -1,4 +1,5 @@
 import MetalKit
+import QuartzCore
 import UIKit
 
 public enum MetalStandaloneViewAlignment {
@@ -19,14 +20,94 @@ public enum MetalAnimationItem {
     )
 }
 
+public extension MetalAnimationItem {
+    /// 把一段文本拆成动画单元：英文/数字按单词，汉字、标点及其他符号逐字，连续空白合并为一个单元。
+    /// 空白单元只参与排版占位，没有可见字形，因此不生成动画实例、不占动画时间槽位。
+    static func tokenize(_ text: String) -> [MetalAnimationItem] {
+        var items: [MetalAnimationItem] = []
+        var word = ""
+        var whitespace = ""
+
+        func flushWord() {
+            guard !word.isEmpty else { return }
+            items.append(.text(word))
+            word = ""
+        }
+        func flushWhitespace() {
+            guard !whitespace.isEmpty else { return }
+            items.append(.text(whitespace))
+            whitespace = ""
+        }
+
+        for character in text {
+            if character.isWhitespace {
+                flushWord()
+                whitespace.append(character)
+            } else if character.isWordCharacter {
+                flushWhitespace()
+                word.append(character)
+            } else {
+                flushWord()
+                flushWhitespace()
+                items.append(.text(String(character)))
+            }
+        }
+        flushWord()
+        flushWhitespace()
+        return items
+    }
+}
+
+private extension Character {
+    var isWordCharacter: Bool {
+        guard isLetter || isNumber else { return false }
+        return !unicodeScalars.contains { $0.isCJKIdeograph }
+    }
+}
+
+private extension Unicode.Scalar {
+    var isCJKIdeograph: Bool {
+        switch value {
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+             0x20000...0x2A6DF, 0x2A700...0x2EBEF:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 public final class MetalTextView: MTKView, MTKViewDelegate {
     public var onStats: ((PerformanceSnapshot) -> Void)?
     public var onAnimationComplete: (() -> Void)?
     public var onError: ((String) -> Void)?
     public private(set) var initializationError: String?
 
-    public var items: [MetalAnimationItem] = [] {
-        didSet { invalidateContentLayout() }
+    private var storedItems: [MetalAnimationItem] = []
+    /// 整段设置会重置内容并从头播放；流式追加请用 `append(items:)`。
+    public var items: [MetalAnimationItem] {
+        get { storedItems }
+        set {
+            storedItems = newValue
+            invalidateContentLayout()
+        }
+    }
+    private var pendingAppend = false
+    private var appendLayoutScheduled = false
+
+    /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
+    /// 时间轴；同一 runloop 内的多次追加合并为一次排版重建。需在主线程调用。
+    public func append(items newItems: [MetalAnimationItem]) {
+        guard !newItems.isEmpty else { return }
+        storedItems.append(contentsOf: newItems)
+        pendingAppend = true
+        guard !appendLayoutScheduled else { return }
+        appendLayoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.appendLayoutScheduled = false
+            self.layoutItemsIfNeeded()
+        }
     }
     /// 行高 = font.lineHeight + lineSpacing。修改任一配置都会重新排版并重建图集。
     public var font = AnimationConfiguration.font {
@@ -47,6 +128,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private var lastContentRect = CGRect.null
     private var lastContentScale: CGFloat = 0
     private var standaloneViewLayouts: [StandaloneViewLayout] = []
+    private var timelineStartTime = CACurrentMediaTime()
     private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
     private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
     private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
@@ -99,7 +181,8 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             height: bounds.height - top - bottom
         )
         guard contentRect.width > 0, contentRect.height > 0 else { return }
-        guard contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
+        guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
+        let preservingTimeline = pendingAppend
 
         do {
             standaloneViewLayouts = try renderer.layout(
@@ -110,25 +193,26 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 maxBlur: maxBlur,
                 contentRect: contentRect,
                 viewportSize: bounds.size,
-                contentScale: contentScaleFactor
+                contentScale: contentScaleFactor,
+                preservingTimeline: preservingTimeline
             )
-            layoutStandaloneViews()
+            timelineStartTime = renderer.timelineStartTime
+            layoutStandaloneViews(preservingTimeline: preservingTimeline)
             lastContentRect = contentRect
             lastContentScale = contentScaleFactor
+            pendingAppend = false
             isPaused = false
+            print("[MTV] layout preserving=\(preservingTimeline) rect=\(contentRect) bounds=\(bounds) safe=\(safeAreaInsets) items=\(items.count) instances=\(renderer.debugInstanceCount) standalone=\(standaloneViewLayouts.map { $0.frame })")
         } catch {
             onError?(error.localizedDescription)
         }
     }
 
     public func replay() {
-        guard let renderer else { return }
-        renderer.replay()
-        replayStandaloneViews()
-        isPaused = false
+        invalidateContentLayout()
     }
 
-    private func layoutStandaloneViews() {
+    private func layoutStandaloneViews(preservingTimeline: Bool) {
         let validIdentifiers = Set(standaloneViewLayouts.map { ObjectIdentifier($0.view) })
         let staleIdentifiers = standaloneContainers.keys.filter { !validIdentifiers.contains($0) }
         for identifier in staleIdentifiers {
@@ -140,6 +224,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             standaloneStartWorkItems.removeValue(forKey: identifier)
         }
 
+        var newIdentifiers = Set<ObjectIdentifier>()
         for layout in standaloneViewLayouts {
             let identifier = ObjectIdentifier(layout.view)
             let container: UIView
@@ -151,22 +236,30 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 container.addSubview(layout.view)
                 addSubview(container)
                 standaloneContainers[identifier] = container
+                newIdentifiers.insert(identifier)
             }
-            standaloneStartWorkItems[identifier]?.cancel()
-            standaloneAnimators[identifier]?.stopAnimation(true)
-            container.transform = .identity
-            container.frame = layout.frame
+            // 续接时旧 view 的待启动任务和进行中的动画都保持不动，只更新布局。
+            if !preservingTimeline || newIdentifiers.contains(identifier) {
+                standaloneStartWorkItems[identifier]?.cancel()
+                standaloneAnimators[identifier]?.stopAnimation(true)
+                container.transform = .identity
+            }
+            container.bounds.size = layout.frame.size
+            container.center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
+            print("[MTV] standalone set frame=\(layout.frame) actual=\(container.frame) transform=\(container.transform) preserving=\(preservingTimeline)")
             layout.view.bounds.size = container.bounds.size
             layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
             layout.view.setNeedsLayout()
             layout.view.layoutIfNeeded()
         }
-        replayStandaloneViews()
+        replayStandaloneViews(newIdentifiers: preservingTimeline ? newIdentifiers : nil)
     }
 
-    private func replayStandaloneViews() {
+    /// newIdentifiers 为 nil 时全部重播；否则只播放本次新增的 view，已显示的保持原状。
+    private func replayStandaloneViews(newIdentifiers: Set<ObjectIdentifier>?) {
         for layout in standaloneViewLayouts {
             let identifier = ObjectIdentifier(layout.view)
+            if let newIdentifiers, !newIdentifiers.contains(identifier) { continue }
             guard let container = standaloneContainers[identifier] else { continue }
             standaloneStartWorkItems[identifier]?.cancel()
             standaloneAnimators[identifier]?.stopAnimation(true)
@@ -187,12 +280,15 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             }
             standaloneAnimators[identifier] = animator
             standaloneStartWorkItems[identifier] = startWorkItem
-            let delay = AnimationConfiguration.startDelay + TimeInterval(layout.delay)
+            // layout.delay 是相对 renderer 时间轴起点的时刻，换算成相对现在的等待时长，
+            // 保证 standalone view 与 GPU 实例同步（重置与追加都适用）。
+            let delay = max(0, timelineStartTime + TimeInterval(layout.delay) - CACurrentMediaTime())
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: startWorkItem)
         }
     }
 
     private func invalidateContentLayout() {
+        pendingAppend = false
         lastContentRect = .null
         layoutItemsIfNeeded()
     }

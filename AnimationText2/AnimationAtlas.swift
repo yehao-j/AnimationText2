@@ -4,12 +4,17 @@ import UIKit
 
 struct AnimationConfiguration {
     /// 单个动画单元的动画时长，单位为秒。
-    static let duration: Float = 0.22
+//    static let duration: Float = 0.22
     /// 相邻动画单元开始动画的时间间隔，单位为秒。
-    static let stagger: Float = 0.03
-    static let startDelay: TimeInterval = 0.08
+//    static let stagger: Float = 0.03
+    
+    static let duration: Float = 1
+    static let stagger: Float = 0.2
+    
+    /// 动画开始前的延迟时间，单位为秒。
+    static let startDelay: TimeInterval = 4
     /// 动画单元在开始时的垂直偏移距离，单位为点。
-    static let travelDistance: Float = 16
+    static let travelDistance: Float = 10
     static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
     static let letterSpacing: CGFloat = 0
     static let lineSpacing: CGFloat = 0
@@ -36,6 +41,8 @@ struct AnimationAtlas {
     let texture: MTLTexture
     let instances: [AnimationInstance]
     let standaloneViewLayouts: [StandaloneViewLayout]
+    /// 按动画实例生成顺序排列的 delay；流式追加重建时旧实例沿用这些时刻，保证不重播。
+    let sequenceDelays: [Float]
     let blurAtlasSize: CGSize
     let animationDuration: Float
     let pixelsPerPoint: Float
@@ -117,10 +124,23 @@ enum AnimationAtlasBuilder {
         contentRect: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat,
+        existingDelays: [Float],
+        elapsed: Float,
         device: MTLDevice
     ) throws -> AnimationAtlas {
         let maxBlur = max(0, maxBlur)
         let scale = max(1, contentScale)
+        // sequence 是动画实例的生成序号（空白文本不产生实例、不占序号）。旧实例沿用
+        // existingDelays，新实例从 max(队尾 delay + stagger, 当前已播时间) 起依次错开；
+        // 整段重置即 existingDelays = []、elapsed = 0 的特例。
+        let firstNewDelay = max(
+            (existingDelays.last ?? -AnimationConfiguration.stagger) + AnimationConfiguration.stagger,
+            elapsed
+        )
+        func delay(for sequence: Int) -> Float {
+            if sequence < existingDelays.count { return existingDelays[sequence] }
+            return firstNewDelay + Float(sequence - existingDelays.count) * AnimationConfiguration.stagger
+        }
         let textLayout = layoutText(
             items: items,
             font: font,
@@ -143,7 +163,7 @@ enum AnimationAtlasBuilder {
                     text: text,
                     textColor: textColor,
                     glyphs: glyphsByItem[itemIndex] ?? [],
-                    sequence: descriptions.count + standaloneViewLayouts.count,
+                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
             case .staticView(let view, let x, let size):
@@ -162,7 +182,7 @@ enum AnimationAtlasBuilder {
                     displayFrame: frame,
                     viewportSize: viewportSize,
                     contentScale: scale,
-                    sequence: descriptions.count + standaloneViewLayouts.count,
+                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
             case .standaloneView(let view, _, _):
@@ -170,8 +190,7 @@ enum AnimationAtlasBuilder {
                 standaloneViewLayouts.append(StandaloneViewLayout(
                     view: view,
                     frame: textLayout.standaloneFrames[itemIndex]!,
-                    delay: Float(descriptions.count + standaloneViewLayouts.count)
-                        * AnimationConfiguration.stagger
+                    delay: delay(for: descriptions.count + standaloneViewLayouts.count)
                 ))
             }
             if let description {
@@ -382,7 +401,7 @@ enum AnimationAtlasBuilder {
         text: String,
         textColor: UIColor,
         glyphs: [PositionedGlyph],
-        sequence: Int,
+        delay: Float,
         rasters: inout [RasterKey: Raster]
     ) -> Description? {
         guard let firstGlyph = glyphs.first else { return nil }
@@ -434,7 +453,7 @@ enum AnimationAtlasBuilder {
         return Description(
             key: key,
             bounds: bounds,
-            delay: Float(sequence) * AnimationConfiguration.stagger
+            delay: delay
         )
     }
 
@@ -504,7 +523,7 @@ enum AnimationAtlasBuilder {
         displayFrame: CGRect,
         viewportSize: CGSize,
         contentScale: CGFloat,
-        sequence: Int,
+        delay: Float,
         rasters: inout [RasterKey: Raster]
     ) throws -> Description {
         guard displayFrame.width > 0, displayFrame.height > 0 else {
@@ -541,7 +560,7 @@ enum AnimationAtlasBuilder {
         return Description(
             key: key,
             bounds: bounds,
-            delay: Float(sequence) * AnimationConfiguration.stagger
+            delay: delay
         )
     }
 
@@ -679,13 +698,14 @@ enum AnimationAtlasBuilder {
             )
         }
 
-        let itemCount = descriptions.count + standaloneViewLayouts.count
-        let animationDuration = itemCount == 0 ? 0 : Float(itemCount - 1)
-            * AnimationConfiguration.stagger + AnimationConfiguration.duration
+        // delay 随生成序号严格递增，排序后即实例的生成顺序。
+        let sequenceDelays = (descriptions.map(\.delay) + standaloneViewLayouts.map(\.delay)).sorted()
+        let animationDuration = sequenceDelays.last.map { $0 + AnimationConfiguration.duration } ?? 0
         return AnimationAtlas(
             texture: texture,
             instances: instances,
             standaloneViewLayouts: standaloneViewLayouts,
+            sequenceDelays: sequenceDelays,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
             pixelsPerPoint: Float(contentScale),
