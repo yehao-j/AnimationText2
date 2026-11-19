@@ -149,6 +149,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private var standaloneViewLayouts: [StandaloneViewLayout] = []
     private var timelineStartTime = CACurrentMediaTime()
     private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
+    private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
     private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
     private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
 
@@ -235,6 +236,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             standaloneAnimators[identifier]?.stopAnimation(true)
             standaloneContainers[identifier]?.removeFromSuperview()
             standaloneContainers.removeValue(forKey: identifier)
+            standaloneBlurViews.removeValue(forKey: identifier)
             standaloneAnimators.removeValue(forKey: identifier)
             standaloneStartWorkItems.removeValue(forKey: identifier)
         }
@@ -253,6 +255,12 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 standaloneContainers[identifier] = container
                 newIdentifiers.insert(identifier)
             }
+            if standaloneBlurViews[identifier] == nil {
+                let blurView = UIVisualEffectView()
+                blurView.isUserInteractionEnabled = false
+                container.addSubview(blurView)
+                standaloneBlurViews[identifier] = blurView
+            }
             // 续接时旧 view 的待启动任务和进行中的动画都保持不动，只更新布局。
             if !preservingTimeline || newIdentifiers.contains(identifier) {
                 standaloneStartWorkItems[identifier]?.cancel()
@@ -261,8 +269,8 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             }
             container.bounds.size = layout.frame.size
             container.center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
-            print("[MTV] standalone set frame=\(layout.frame) actual=\(container.frame) transform=\(container.transform) preserving=\(preservingTimeline)")
             layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+            standaloneBlurViews[identifier]?.frame = container.bounds
             layout.view.setNeedsLayout()
             layout.view.layoutIfNeeded()
         }
@@ -274,11 +282,13 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
         for layout in standaloneViewLayouts {
             let identifier = ObjectIdentifier(layout.view)
             if let newIdentifiers, !newIdentifiers.contains(identifier) { continue }
-            guard let container = standaloneContainers[identifier] else { continue }
+            guard let container = standaloneContainers[identifier],
+                  let blurView = standaloneBlurViews[identifier] else { continue }
             standaloneStartWorkItems[identifier]?.cancel()
             standaloneAnimators[identifier]?.stopAnimation(true)
             container.isHidden = true
             container.alpha = 0
+            blurView.effect = maxBlur > 0 ? UIBlurEffect(style: .regular) : nil
             container.transform = CGAffineTransform(
                 translationX: 0,
                 y: CGFloat(AnimationConfiguration.travelDistance)
@@ -289,6 +299,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             ) {
                 container.alpha = 1
                 container.transform = .identity
+                blurView.effect = nil
             }
             animator.addCompletion { position in
                 guard position == .end else { return }

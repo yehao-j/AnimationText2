@@ -4,6 +4,7 @@ final class ViewController: UIViewController {
     private var metalView: MetalTextView!
     private let statsLabel = UILabel()
     private let detailLabel = UILabel()
+    private let standaloneIndicator = UIActivityIndicatorView(style: .medium)
     private var streamingBatches: [[MetalAnimationItem]] = []
     private var streamingWorkItem: DispatchWorkItem?
 
@@ -31,7 +32,8 @@ final class ViewController: UIViewController {
                 makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
                 makeStaticBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
             ],
-            standaloneView: makeStandaloneView()
+            standaloneView: makeStandaloneView(),
+            standaloneIndicator: standaloneIndicator
         )
 
         configureHUD()
@@ -62,6 +64,7 @@ final class ViewController: UIViewController {
 
     private func startStreaming() {
         streamingWorkItem?.cancel()
+        standaloneIndicator.stopAnimating()
         guard let firstBatch = streamingBatches.first else { return }
         metalView.items = firstBatch
         streamBatch(at: 1)
@@ -81,7 +84,7 @@ final class ViewController: UIViewController {
     }
 
     private func makeStaticBadge(title: String, color: UIColor) -> UIView {
-        let badge = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
+        let badge = UIView(frame: CGRect(x: 0, y: 0, width: 70, height: 20))
         badge.backgroundColor = color
         badge.layer.cornerRadius = 9
         badge.layer.borderWidth = 1
@@ -105,9 +108,9 @@ final class ViewController: UIViewController {
         container.backgroundColor = UIColor(red: 0.16, green: 0.20, blue: 0.30, alpha: 1)
         container.layer.cornerRadius = 12
 
-        let indicator = UIActivityIndicatorView(style: .medium)
+        let indicator = standaloneIndicator
         indicator.color = .white
-        indicator.startAnimating()
+        indicator.hidesWhenStopped = false
 
         let label = UILabel()
         label.text = "原生 View 保留内部动画"
@@ -188,7 +191,11 @@ final class ViewController: UIViewController {
 
 private enum DemoText {
     /// 第一批是静态 View 前缀；正文在外部拆分后按 token 边界随机分成小批次，模拟 SSE 分片推送。
-    static func streamingBatches(staticViews: [UIView], standaloneView: UIView) -> [[MetalAnimationItem]] {
+    static func streamingBatches(
+        staticViews: [UIView],
+        standaloneView: UIView,
+        standaloneIndicator: UIActivityIndicatorView
+    ) -> [[MetalAnimationItem]] {
         let prefix: [MetalAnimationItem] = [
             .text("汉"),
             .text("字"),
@@ -198,7 +205,9 @@ private enum DemoText {
             .text("一起"),
             .text(" Animation"),
             .standaloneView(standaloneView, alignment: .left, completion: {
-                print("-----完成")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    standaloneIndicator.startAnimating()
+                }
             }),
 
             .text("单"),
