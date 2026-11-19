@@ -10,6 +10,8 @@ final class ViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
+        
+        print("---------- \(AnimationConfiguration.lineHeight())")
 
         let metalView = MetalTextView(frame: view.bounds, device: nil)
         metalView.layer.borderColor = UIColor.red.cgColor
@@ -79,7 +81,7 @@ final class ViewController: UIViewController {
     }
 
     private func makeStaticBadge(title: String, color: UIColor) -> UIView {
-        let badge = UIView()
+        let badge = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
         badge.backgroundColor = color
         badge.layer.cornerRadius = 9
         badge.layer.borderWidth = 1
@@ -99,7 +101,7 @@ final class ViewController: UIViewController {
     }
 
     private func makeStandaloneView() -> UIView {
-        let container = UIView()
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: 260, height: 100))
         container.backgroundColor = UIColor(red: 0.16, green: 0.20, blue: 0.30, alpha: 1)
         container.layer.cornerRadius = 12
 
@@ -190,16 +192,18 @@ private enum DemoText {
         let prefix: [MetalAnimationItem] = [
             .text("汉"),
             .text("字"),
-            .staticView(staticViews[0], size: CGSize(width: 56, height: 56)),
+            .staticView(staticViews[0]),
             .text("与"),
             .text(" Metal "),
             .text("一起"),
             .text(" Animation"),
-            .standaloneView(standaloneView, size: CGSize(width: 260, height: 64), alignment: .left),
+            .standaloneView(standaloneView, alignment: .left, completion: {
+                print("-----完成")
+            }),
 
             .text("单"),
             .text("词"),
-            .staticView(staticViews[1], size: CGSize(width: 56, height: 26)),
+            .staticView(staticViews[1]),
             .text("夹在"),
             .text(" Chinese "),
             .text("和"),
@@ -209,7 +213,7 @@ private enum DemoText {
 
             .text("静"),
             .text("态"),
-            .staticView(staticViews[2], size: CGSize(width: 56, height: 26)),
+            .staticView(staticViews[2]),
             .text("也能"),
             .text("和"),
             .text(" Text "),

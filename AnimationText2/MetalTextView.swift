@@ -10,13 +10,13 @@ public enum MetalStandaloneViewAlignment {
 
 public enum MetalAnimationItem {
     case text(String)
-    /// 作为行内元素紧跟前一个元素排版，并在当前行内垂直居中；高度最大为当前行高。
-    case staticView(UIView, size: CGSize)
-    /// 原生 View 独占一行并按 alignment 对齐，宽度夹紧到 MetalTextView 宽度；保留内部动画，仅执行上移动画。
+    /// 作为行内元素紧跟前一个元素排版，直接读取 view.bounds.size，并在当前行内垂直居中。
+    case staticView(UIView)
+    /// 原生 View 独占一行并按 alignment 对齐；直接读取 view.bounds.size，宽度夹紧到 MetalTextView 宽度。
     case standaloneView(
         UIView,
-        size: CGSize,
-        alignment: MetalStandaloneViewAlignment = .center
+        alignment: MetalStandaloneViewAlignment = .center,
+        completion: (() -> Void)? = nil
     )
 }
 
@@ -218,7 +218,6 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             lastContentScale = contentScaleFactor
             pendingAppend = false
             isPaused = false
-            print("[MTV] layout preserving=\(preservingTimeline) rect=\(contentRect) bounds=\(bounds) safe=\(safeAreaInsets) items=\(items.count) instances=\(renderer.debugInstanceCount) standalone=\(standaloneViewLayouts.map { $0.frame })")
         } catch {
             onError?(error.localizedDescription)
         }
@@ -263,7 +262,6 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             container.bounds.size = layout.frame.size
             container.center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
             print("[MTV] standalone set frame=\(layout.frame) actual=\(container.frame) transform=\(container.transform) preserving=\(preservingTimeline)")
-            layout.view.bounds.size = container.bounds.size
             layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
             layout.view.setNeedsLayout()
             layout.view.layoutIfNeeded()
@@ -280,15 +278,21 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             standaloneStartWorkItems[identifier]?.cancel()
             standaloneAnimators[identifier]?.stopAnimation(true)
             container.isHidden = true
+            container.alpha = 0
             container.transform = CGAffineTransform(
                 translationX: 0,
                 y: CGFloat(AnimationConfiguration.travelDistance)
             )
             let animator = UIViewPropertyAnimator(
                 duration: TimeInterval(AnimationConfiguration.duration),
-                curve: .easeOut
+                curve: .linear
             ) {
+                container.alpha = 1
                 container.transform = .identity
+            }
+            animator.addCompletion { position in
+                guard position == .end else { return }
+                layout.completion?()
             }
             let startWorkItem = DispatchWorkItem {
                 container.isHidden = false

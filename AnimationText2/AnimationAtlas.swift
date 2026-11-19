@@ -45,6 +45,7 @@ struct StandaloneViewLayout {
     let view: UIView
     let frame: CGRect
     let delay: Float
+    let completion: (() -> Void)?
 }
 
 struct AnimationAtlas {
@@ -195,7 +196,7 @@ enum AnimationAtlasBuilder {
                     delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
-            case .staticView(let view, _):
+            case .staticView(let view):
                 if let frame = textLayout.staticFrames[itemIndex] {
                     description = try makeViewDescription(
                         view: view,
@@ -208,12 +209,13 @@ enum AnimationAtlasBuilder {
                 } else {
                     description = nil
                 }
-            case .standaloneView(let view, _, _):
+            case .standaloneView(let view, _, let completion):
                 description = nil
                 standaloneViewLayouts.append(StandaloneViewLayout(
                     view: view,
                     frame: textLayout.standaloneFrames[itemIndex]!,
-                    delay: delay(for: descriptions.count + standaloneViewLayouts.count)
+                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
+                    completion: completion
                 ))
             }
             if let description {
@@ -278,7 +280,8 @@ enum AnimationAtlasBuilder {
         var index = 0
 
         while index < items.count {
-            if case .standaloneView(_, let size, let alignment) = items[index] {
+            if case .standaloneView(let view, let alignment, _) = items[index] {
+                let size = view.bounds.size
                 let width = min(max(0, size.width), viewportSize.width)
                 let height = max(0, size.height)
                 let x: CGFloat
@@ -353,7 +356,8 @@ enum AnimationAtlasBuilder {
                     range: NSRange(location: attributedText.length, length: text.utf16.count)
                 ))
                 attributedText.append(NSAttributedString(string: text))
-            case .staticView(_, let size):
+            case .staticView(let view):
+                let size = view.bounds.size
                 staticItems[attributedText.length] = StaticItem(itemIndex: itemIndex, size: size)
                 let delegate = makeInlineViewDelegate(width: max(0, size.width))
                 attributedText.append(NSAttributedString(
@@ -428,7 +432,7 @@ enum AnimationAtlasBuilder {
                     if let staticItem = staticItems[runRange.location] {
                         var position = CGPoint.zero
                         CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
-                        let displayHeight = min(max(0, staticItem.size.height), lineHeight)
+                        let displayHeight = max(0, staticItem.size.height)
                         staticFrames[staticItem.itemIndex] = CGRect(
                             x: frameRect.minX + lineOrigins[lineIndex].x + position.x,
                             y: viewportHeight - lineTop + (lineHeight - displayHeight) / 2,
@@ -587,7 +591,6 @@ enum AnimationAtlasBuilder {
             throw AnimationAtlasError.invalidViewFrame
         }
 
-        view.frame = displayFrame
         view.setNeedsLayout()
         view.layoutIfNeeded()
 
