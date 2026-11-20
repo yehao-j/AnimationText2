@@ -199,13 +199,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
 
     public func layoutItemsIfNeeded() {
         guard let renderer, !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
-        let bottom = safeAreaInsets.bottom + 108
-        let contentRect = CGRect(
-            x: 0,
-            y: bottom,
-            width: bounds.width,
-            height: bounds.height - bottom
-        )
+        let contentRect = bounds
         guard contentRect.width > 0, contentRect.height > 0 else { return }
         guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
         let preservingTimeline = pendingAppend
