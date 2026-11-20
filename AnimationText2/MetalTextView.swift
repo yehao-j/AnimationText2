@@ -255,12 +255,19 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 standaloneContainers[identifier] = container
                 newIdentifiers.insert(identifier)
             }
-            if standaloneBlurViews[identifier] == nil {
-                let blurView = UIVisualEffectView()
+            let blurView: UIVisualEffectView
+            if let existing = standaloneBlurViews[identifier] {
+                blurView = existing
+            } else {
+                blurView = UIVisualEffectView()
                 blurView.isUserInteractionEnabled = false
                 container.addSubview(blurView)
                 standaloneBlurViews[identifier] = blurView
             }
+            // 模糊层默认是直角矩形，会盖住 view 自身的圆角；跟随 view 的圆角设置。
+            blurView.layer.cornerRadius = layout.view.layer.cornerRadius
+            blurView.layer.cornerCurve = layout.view.layer.cornerCurve
+            blurView.clipsToBounds = true
             // 续接时旧 view 的待启动任务和进行中的动画都保持不动，只更新布局。
             if !preservingTimeline || newIdentifiers.contains(identifier) {
                 standaloneStartWorkItems[identifier]?.cancel()
@@ -270,7 +277,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             container.bounds.size = layout.frame.size
             container.center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
             layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
-            standaloneBlurViews[identifier]?.frame = container.bounds
+            blurView.frame = container.bounds
             layout.view.setNeedsLayout()
             layout.view.layoutIfNeeded()
         }

@@ -7,13 +7,12 @@ final class ViewController: UIViewController {
     private let standaloneIndicator = UIActivityIndicatorView(style: .medium)
     private var streamingBatches: [[MetalAnimationItem]] = []
     private var streamingWorkItem: DispatchWorkItem?
+    private var appendRemainingAfterCompletion = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
-        print("---------- \(AnimationConfiguration.lineHeight())")
-
         let metalView = MetalTextView(frame: view.bounds, device: nil)
         metalView.layer.borderColor = UIColor.red.cgColor
         metalView.layer.borderWidth = 1
@@ -46,7 +45,11 @@ final class ViewController: UIViewController {
             self?.detailLabel.text = "\(snapshot.itemCount) 个动画单元 · 2 draw calls/帧 · 单核 = 100%"
         }
         metalView.onAnimationComplete = { [weak self] in
-            self?.statsLabel.text = "动画已结束 · Metal 已暂停"
+            guard let self else { return }
+            self.statsLabel.text = "动画已结束 · Metal 已暂停"
+            guard self.appendRemainingAfterCompletion else { return }
+            self.appendRemainingAfterCompletion = false
+            self.appendRemainingItems()
         }
         metalView.onError = { [weak self] message in
             self?.showError(title: "排版失败", message: message)
@@ -65,22 +68,26 @@ final class ViewController: UIViewController {
     private func startStreaming() {
         streamingWorkItem?.cancel()
         standaloneIndicator.stopAnimating()
-        guard let firstBatch = streamingBatches.first else { return }
-        metalView.items = firstBatch
-        streamBatch(at: 1)
-    }
-
-    private func streamBatch(at index: Int) {
-        guard index < streamingBatches.count else { return }
+        appendRemainingAfterCompletion = false
+        guard streamingBatches.count > 1 else { return }
+        metalView.items = streamingBatches[0]
+        // 第一批还在播放时追加第二批，之后的追加等全部播完再延迟进行。
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.metalView.append(items: self.streamingBatches[index])
-            self.streamBatch(at: index + 1)
+            self.metalView.append(items: self.streamingBatches[1])
+            self.appendRemainingAfterCompletion = true
         }
         streamingWorkItem = workItem
-        // 随机推送间隔模拟 SSE 网络分片，偶发长延迟模拟网络卡顿。
-        let delay = Double.random(in: 1...20) == 1 ? 0.6 : Double.random(in: 0.04...0.14)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: workItem)
+    }
+
+    private func appendRemainingItems() {
+        let remaining = streamingBatches.dropFirst(2).flatMap { $0 }
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.metalView.append(items: remaining)
+        }
+        streamingWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
     private func makeStaticBadge(title: String, color: UIColor) -> UIView {
@@ -107,6 +114,7 @@ final class ViewController: UIViewController {
         let container = UIView(frame: CGRect(x: 0, y: 0, width: 260, height: 100))
         container.backgroundColor = UIColor(red: 0.16, green: 0.20, blue: 0.30, alpha: 1)
         container.layer.cornerRadius = 12
+        container.clipsToBounds = true
 
         let indicator = standaloneIndicator
         indicator.color = .white
@@ -232,7 +240,7 @@ private enum DemoText {
         ]
 
         let content = """
-        外部按汉字或单词拆分文本，内部保持整段排版，再依次播放入场动画。
+        外部按汉字或单词拆   分文本，内部保持整 段排版，再依次播放入场动画。
 
         文字、单词和静态快照共用位移、透明度与高斯模糊效果。
         Streaming tokens arrive over SSE, and each word animates as it lands.

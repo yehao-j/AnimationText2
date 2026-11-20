@@ -4,15 +4,15 @@ import UIKit
 
 struct AnimationConfiguration {
     /// 单个动画单元的动画时长，单位为秒。
-//    static let duration: Float = 0.22
+    static let duration: Float = 0.42
     /// 相邻动画单元开始动画的时间间隔，单位为秒。
-//    static let stagger: Float = 0.03
+    static let stagger: Float = 0.08
     
-    static let duration: Float = 1
-    static let stagger: Float = 0.2
+//    static let duration: Float = 1
+//    static let stagger: Float = 0.2
     
     /// 动画开始前的延迟时间，单位为秒。
-    static let startDelay: TimeInterval = 1
+    static let startDelay: TimeInterval = 0
     /// 动画单元在开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 10
     /// 文本字体。
