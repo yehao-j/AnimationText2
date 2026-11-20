@@ -15,6 +15,7 @@ struct AnimationUniforms {
 final class AnimationRenderer: NSObject {
     var onStats: ((PerformanceSnapshot) -> Void)?
     var onAnimationComplete: (() -> Void)?
+    var onItemAnimationStart: ((CGFloat) -> Void)?
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -25,6 +26,7 @@ final class AnimationRenderer: NSObject {
     private var horizontalTexture: MTLTexture?
     private var viewportSize = CGSize.zero
     private var startTime = CACurrentMediaTime() + 0.15
+    private var nextItemHeightIndex = 0
     /// 当前动画时间轴的起点，供 standalone view 把 delay 换算成实际等待时长。
     var timelineStartTime: CFTimeInterval { startTime }
     var debugInstanceCount: Int { atlas?.instances.count ?? 0 }
@@ -109,12 +111,19 @@ final class AnimationRenderer: NSObject {
 
     func replay() {
         startTime = CACurrentMediaTime() + AnimationConfiguration.startDelay
+        nextItemHeightIndex = 0
     }
 
     func draw(in view: MTKView) {
         guard let atlas else { return }
         let now = CACurrentMediaTime()
         let rawElapsed = Float(max(0, now - startTime))
+        while nextItemHeightIndex < atlas.itemHeights.count {
+            let itemHeight = atlas.itemHeights[nextItemHeightIndex]
+            guard itemHeight.delay <= rawElapsed else { break }
+            nextItemHeightIndex += 1
+            onItemAnimationStart?(itemHeight.height)
+        }
         let animationFinished = rawElapsed >= atlas.animationDuration
 
         if atlas.instances.isEmpty {

@@ -81,6 +81,8 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     public var onStats: ((PerformanceSnapshot) -> Void)?
     public var onAnimationComplete: (() -> Void)?
     public var onError: ((String) -> Void)?
+    /// item 开始动画时回调截至当前行的累计高度，相同高度不重复回调。
+    public var heightBlock: ((CGFloat) -> Void)?
     public private(set) var initializationError: String?
 
     private var storedItems: [MetalAnimationItem] = []
@@ -152,6 +154,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
     private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
     private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
+    private var lastHeightBlockValue: CGFloat?
 
     public override init(frame frameRect: CGRect, device: MTLDevice?) {
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
@@ -177,6 +180,12 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             renderer.onAnimationComplete = { [weak self] in
                 self?.isPaused = true
                 self?.onAnimationComplete?()
+            }
+            renderer.onItemAnimationStart = { [weak self] height in
+                guard let self, let heightBlock = self.heightBlock,
+                      self.lastHeightBlockValue != height else { return }
+                self.lastHeightBlockValue = height
+                heightBlock(height)
             }
             self.renderer = renderer
         } catch {

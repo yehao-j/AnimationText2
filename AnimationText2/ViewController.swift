@@ -14,6 +14,9 @@ final class ViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
         let metalView = MetalTextView(frame: view.bounds, device: nil)
+        metalView.heightBlock = {
+            print("-----", $0)
+        }
         metalView.layer.borderColor = UIColor.red.cgColor
         metalView.layer.borderWidth = 1
         metalView.translatesAutoresizingMaskIntoConstraints = false

@@ -48,10 +48,16 @@ struct StandaloneViewLayout {
     let completion: (() -> Void)?
 }
 
+struct AnimationItemHeight {
+    let delay: Float
+    let height: CGFloat
+}
+
 struct AnimationAtlas {
     let texture: MTLTexture
     let instances: [AnimationInstance]
     let standaloneViewLayouts: [StandaloneViewLayout]
+    let itemHeights: [AnimationItemHeight]
     /// 按动画实例生成顺序排列的 delay；流式追加重建时旧实例沿用这些时刻，保证不重播。
     let sequenceDelays: [Float]
     let blurAtlasSize: CGSize
@@ -90,12 +96,14 @@ enum AnimationAtlasBuilder {
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
         var staticFrames: [Int: CGRect] = [:]
         var standaloneFrames: [Int: CGRect] = [:]
+        var itemHeights: [Int: CGFloat] = [:]
         var lineFrames: [CGRect] = []
     }
 
     private struct TextSegment {
         let glyphsByItem: [Int: [PositionedGlyph]]
         let staticFrames: [Int: CGRect]
+        let itemHeights: [Int: CGFloat]
         let lineFrames: [CGRect]
         let height: CGFloat
     }
@@ -183,6 +191,7 @@ enum AnimationAtlasBuilder {
 
         var descriptions: [Description] = []
         var standaloneViewLayouts: [StandaloneViewLayout] = []
+        var itemHeights: [AnimationItemHeight] = []
         var rasters: [RasterKey: Raster] = [:]
 
         for (itemIndex, item) in items.enumerated() {
@@ -211,15 +220,24 @@ enum AnimationAtlasBuilder {
                 }
             case .standaloneView(let view, _, let completion):
                 description = nil
-                standaloneViewLayouts.append(StandaloneViewLayout(
+                let standaloneLayout = StandaloneViewLayout(
                     view: view,
                     frame: textLayout.standaloneFrames[itemIndex]!,
                     delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     completion: completion
+                )
+                standaloneViewLayouts.append(standaloneLayout)
+                itemHeights.append(AnimationItemHeight(
+                    delay: standaloneLayout.delay,
+                    height: standaloneLayout.frame.maxY
                 ))
             }
             if let description {
                 descriptions.append(description)
+                itemHeights.append(AnimationItemHeight(
+                    delay: description.delay,
+                    height: textLayout.itemHeights[itemIndex]!
+                ))
             }
         }
 
@@ -260,6 +278,7 @@ enum AnimationAtlasBuilder {
         return try makeAtlas(
             descriptions: descriptions,
             standaloneViewLayouts: standaloneViewLayouts,
+            itemHeights: itemHeights,
             rasters: rasters,
             maxBlur: maxBlur,
             contentScale: scale,
@@ -293,12 +312,14 @@ enum AnimationAtlasBuilder {
                 case .right:
                     x = viewportSize.width - width
                 }
-                layout.standaloneFrames[index] = CGRect(
+                let frame = CGRect(
                     x: x,
                     y: viewportSize.height - cursorY,
                     width: width,
                     height: height
                 )
+                layout.standaloneFrames[index] = frame
+                layout.itemHeights[index] = frame.maxY
                 cursorY -= height + lineSpacing
                 index += 1
                 continue
@@ -324,6 +345,9 @@ enum AnimationAtlasBuilder {
             }
             for (itemIndex, frame) in segment.staticFrames {
                 layout.staticFrames[itemIndex] = frame
+            }
+            for (itemIndex, height) in segment.itemHeights {
+                layout.itemHeights[itemIndex] = height
             }
             layout.lineFrames.append(contentsOf: segment.lineFrames)
             cursorY -= segment.height
@@ -370,7 +394,13 @@ enum AnimationAtlasBuilder {
         }
 
         guard attributedText.length > 0 else {
-            return TextSegment(glyphsByItem: [:], staticFrames: [:], lineFrames: [], height: 0)
+            return TextSegment(
+                glyphsByItem: [:],
+                staticFrames: [:],
+                itemHeights: [:],
+                lineFrames: [],
+                height: 0
+            )
         }
 
         let lineHeight = font.lineHeight
@@ -398,6 +428,7 @@ enum AnimationAtlasBuilder {
         let visibleHeight = min(textHeight, max(0, top - contentRect.minY))
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
         var staticFrames: [Int: CGRect] = [:]
+        var itemHeights: [Int: CGFloat] = [:]
         var lineFrames: [CGRect] = []
 
         if visibleHeight > 0 {
@@ -426,6 +457,7 @@ enum AnimationAtlasBuilder {
                     width: frameRect.width,
                     height: lineHeight
                 ))
+                let itemHeight = lineFrames[lineIndex].maxY
                 let runs = CTLineGetGlyphRuns(line) as! [CTRun]
                 for run in runs {
                     let runRange = CTRunGetStringRange(run)
@@ -439,6 +471,7 @@ enum AnimationAtlasBuilder {
                             width: staticItem.size.width,
                             height: displayHeight
                         )
+                        itemHeights[staticItem.itemIndex] = itemHeight
                         continue
                     }
 
@@ -472,6 +505,10 @@ enum AnimationAtlasBuilder {
                             baseline: baseline,
                             localBounds: localBounds
                         ))
+                        itemHeights[textItem.itemIndex] = max(
+                            itemHeights[textItem.itemIndex] ?? 0,
+                            itemHeight
+                        )
                     }
                 }
             }
@@ -479,6 +516,7 @@ enum AnimationAtlasBuilder {
         return TextSegment(
             glyphsByItem: glyphsByItem,
             staticFrames: staticFrames,
+            itemHeights: itemHeights,
             lineFrames: lineFrames,
             height: textHeight
         )
@@ -627,6 +665,7 @@ enum AnimationAtlasBuilder {
     private static func makeAtlas(
         descriptions: [Description],
         standaloneViewLayouts: [StandaloneViewLayout],
+        itemHeights: [AnimationItemHeight],
         rasters: [RasterKey: Raster],
         maxBlur: Float,
         contentScale: CGFloat,
@@ -769,6 +808,7 @@ enum AnimationAtlasBuilder {
             texture: texture,
             instances: instances,
             standaloneViewLayouts: standaloneViewLayouts,
+            itemHeights: itemHeights,
             sequenceDelays: sequenceDelays,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
