@@ -9,7 +9,6 @@ struct AnimationUniforms {
     var travelDistance: Float
     var maxBlurInPixels: Float
     var viewportSize: SIMD2<Float>
-    var layoutHeight: Float
     var atlasTexelSize: SIMD2<Float>
 }
 
@@ -26,7 +25,6 @@ final class AnimationRenderer: NSObject {
     private var instanceBuffer: MTLBuffer?
     private var horizontalTexture: MTLTexture?
     private var viewportSize = CGSize.zero
-    private var layoutHeight: CGFloat = 0
     private var startTime = CACurrentMediaTime() + 0.15
     private var nextItemHeightIndex = 0
     /// 当前动画时间轴的起点，供 standalone view 把 delay 换算成实际等待时长。
@@ -107,13 +105,8 @@ final class AnimationRenderer: NSObject {
         )
         self.atlas = atlas
         self.viewportSize = viewportSize
-        self.layoutHeight = viewportSize.height
         if !preservingTimeline { replay() }
         return atlas.standaloneViewLayouts
-    }
-
-    func updateViewportSize(_ viewportSize: CGSize) {
-        self.viewportSize = viewportSize
     }
 
     func replay() {
@@ -166,7 +159,6 @@ final class AnimationRenderer: NSObject {
             travelDistance: AnimationConfiguration.travelDistance,
             maxBlurInPixels: atlas.maxBlur * atlas.pixelsPerPoint,
             viewportSize: SIMD2(Float(viewportSize.width), Float(viewportSize.height)),
-            layoutHeight: Float(layoutHeight),
             atlasTexelSize: SIMD2(
                 1 / Float(atlas.texture.width),
                 1 / Float(atlas.texture.height)

@@ -167,7 +167,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
         clipsToBounds = true
         clearColor = MTLClearColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         framebufferOnly = true
-        enableSetNeedsDisplay = true
+        enableSetNeedsDisplay = false
         isPaused = false
         preferredFramesPerSecond = 60
         delegate = self
@@ -202,17 +202,6 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
         let contentRect = bounds
         guard contentRect.width > 0, contentRect.height > 0 else { return }
         guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
-        let isHeightOnlyChange = !lastContentRect.isNull
-            && contentRect.width == lastContentRect.width
-            && contentRect.height != lastContentRect.height
-            && contentScaleFactor == lastContentScale
-        if isHeightOnlyChange && !pendingAppend {
-            renderer.updateViewportSize(contentRect.size)
-            lastContentRect = contentRect
-            lastContentScale = contentScaleFactor
-            setNeedsDisplay()
-            return
-        }
         let preservingTimeline = pendingAppend
 
         do {

@@ -25,7 +25,7 @@ final class ViewController: UIViewController {
             metalView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             metalView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             metalView.topAnchor.constraint(equalTo: view.topAnchor, constant: 100),
-            metalView.heightAnchor.constraint(equalToConstant: 500)
+            metalView.heightAnchor.constraint(equalToConstant: 2500)
         ])
         self.metalView = metalView
         streamingBatches = DemoText.streamingBatches(

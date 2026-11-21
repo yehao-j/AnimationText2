@@ -425,17 +425,18 @@ enum AnimationAtlasBuilder {
             nil
         )
         let textHeight = ceil(suggestedSize.height)
+        let visibleHeight = min(textHeight, max(0, top - contentRect.minY))
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
         var staticFrames: [Int: CGRect] = [:]
         var itemHeights: [Int: CGFloat] = [:]
         var lineFrames: [CGRect] = []
 
-        if textHeight > 0 {
+        if visibleHeight > 0 {
             let frameRect = CGRect(
                 x: contentRect.minX,
-                y: top - textHeight,
+                y: top - visibleHeight,
                 width: contentRect.width,
-                height: textHeight
+                height: visibleHeight
             )
             let path = CGPath(rect: frameRect, transform: nil)
             let frame = CTFramesetterCreateFrame(
