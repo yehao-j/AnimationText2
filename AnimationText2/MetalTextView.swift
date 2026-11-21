@@ -342,7 +342,6 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private func invalidateContentLayout() {
         pendingAppend = false
         lastContentRect = .null
-        lastHeightBlockValue = nil
         layoutItemsIfNeeded()
     }
 
