@@ -8,26 +8,31 @@ final class ViewController: UIViewController {
     private var streamingBatches: [[MetalAnimationItem]] = []
     private var streamingWorkItem: DispatchWorkItem?
     private var appendRemainingAfterCompletion = false
+    private let initialMetalHeight: CGFloat = 300
+    private var metalHeightConstraint: NSLayoutConstraint!
+    private var firstRowHeight: CGFloat?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
         let metalView = MetalTextView(frame: view.bounds, device: nil)
-        metalView.heightBlock = {
-            print("-----", $0)
-        }
         metalView.layer.borderColor = UIColor.red.cgColor
         metalView.layer.borderWidth = 1
         metalView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(metalView)
+        let heightConstraint = metalView.heightAnchor.constraint(equalToConstant: initialMetalHeight)
+        metalHeightConstraint = heightConstraint
         NSLayoutConstraint.activate([
             metalView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             metalView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             metalView.topAnchor.constraint(equalTo: view.topAnchor, constant: 100),
-            metalView.heightAnchor.constraint(equalToConstant: 500)
+            heightConstraint
         ])
         self.metalView = metalView
+        metalView.heightBlock = { [weak self] height in
+            self?.updateMetalHeight(forRowMaxY: height)
+        }
         streamingBatches = DemoText.streamingBatches(
             staticViews: [
                 makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
@@ -68,10 +73,29 @@ final class ViewController: UIViewController {
         metalView.layoutItemsIfNeeded()
     }
 
+    private func updateMetalHeight(forRowMaxY rowMaxY: CGFloat) {
+        guard let firstRowHeight else {
+            firstRowHeight = rowMaxY
+            return
+        }
+        let targetHeight = initialMetalHeight + max(0, rowMaxY - firstRowHeight)
+        guard targetHeight > metalHeightConstraint.constant else { return }
+        metalHeightConstraint.constant = targetHeight
+        UIView.animate(
+            withDuration: TimeInterval(AnimationConfiguration.duration),
+            delay: 0,
+            options: [.curveLinear, .beginFromCurrentState]
+        ) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
     private func startStreaming() {
         streamingWorkItem?.cancel()
         standaloneIndicator.stopAnimating()
         appendRemainingAfterCompletion = false
+        firstRowHeight = nil
+        metalHeightConstraint.constant = initialMetalHeight
         guard streamingBatches.count > 1 else { return }
         metalView.items = streamingBatches[0]
         // 第一批还在播放时追加第二批，之后的追加等全部播完再延迟进行。
