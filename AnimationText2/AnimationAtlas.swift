@@ -17,17 +17,14 @@ struct AnimationConfiguration {
     static let travelDistance: Float = 10
     /// 文本字体。
     static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
+    /// 普通文本行的行高，默认为当前字体行高向上取整，单位为点。
+    static let lineHeight = ceil(font.lineHeight)
     /// 字符间距，单位为点。
     static let letterSpacing: CGFloat = 0
     /// 相邻文本行之间的额外间距，单位为点。
     static let lineSpacing: CGFloat = 0
     /// 是否为每个文本行绘制随机背景色；颜色生成后保持不变，透明度为 0.5。
     static let showsRandomLineColors = true
-    
-    /// 返回当前字体的行高，单位为点。
-    static func lineHeight() -> CGFloat {
-        font.lineHeight
-    }
 }
 
 struct AnimationInstance {
@@ -157,6 +154,7 @@ enum AnimationAtlasBuilder {
     static func build(
         items: [MetalAnimationItem],
         font: UIFont,
+        lineHeight: CGFloat,
         textColor: UIColor,
         lineSpacing: CGFloat,
         maxBlur: Float,
@@ -183,6 +181,7 @@ enum AnimationAtlasBuilder {
         let textLayout = layoutText(
             items: items,
             font: font,
+            lineHeight: lineHeight,
             textColor: textColor,
             lineSpacing: lineSpacing,
             contentRect: contentRect,
@@ -296,6 +295,7 @@ enum AnimationAtlasBuilder {
     private static func layoutText(
         items: [MetalAnimationItem],
         font: UIFont,
+        lineHeight: CGFloat,
         textColor: UIColor,
         lineSpacing: CGFloat,
         contentRect: CGRect,
@@ -341,6 +341,7 @@ enum AnimationAtlasBuilder {
                 items: items,
                 range: segmentStart..<index,
                 font: font,
+                lineHeight: lineHeight,
                 textColor: textColor,
                 lineSpacing: lineSpacing,
                 contentRect: contentRect,
@@ -369,6 +370,7 @@ enum AnimationAtlasBuilder {
         items: [MetalAnimationItem],
         range: Range<Int>,
         font: UIFont,
+        lineHeight: CGFloat,
         textColor: UIColor,
         lineSpacing: CGFloat,
         contentRect: CGRect,
@@ -410,7 +412,6 @@ enum AnimationAtlasBuilder {
             )
         }
 
-        let lineHeight = font.lineHeight
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.minimumLineHeight = lineHeight
         paragraphStyle.maximumLineHeight = lineHeight

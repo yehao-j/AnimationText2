@@ -74,6 +74,7 @@ final class AnimationRenderer: NSObject {
     func layout(
         items: [MetalAnimationItem],
         font: UIFont,
+        lineHeight: CGFloat,
         textColor: UIColor,
         lineSpacing: CGFloat,
         maxBlur: Float,
@@ -88,6 +89,7 @@ final class AnimationRenderer: NSObject {
         let atlas = try AnimationAtlasBuilder.build(
             items: items,
             font: font,
+            lineHeight: lineHeight,
             textColor: textColor,
             lineSpacing: lineSpacing,
             maxBlur: maxBlur,

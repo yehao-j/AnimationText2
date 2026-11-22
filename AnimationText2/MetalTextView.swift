@@ -113,8 +113,12 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             self.layoutItemsIfNeeded()
         }
     }
-    /// 行高 = font.lineHeight + lineSpacing。修改任一配置都会重新排版并重建图集。
+    /// 修改排版配置会重新排版并重建图集。
     public var font = AnimationConfiguration.font {
+        didSet { invalidateContentLayout() }
+    }
+    /// 普通文本行的行高；独占一行的 standaloneView 使用自身高度。
+    public var lineHeight: CGFloat = AnimationConfiguration.lineHeight {
         didSet { invalidateContentLayout() }
     }
     public var textColor: UIColor = UIColor(red: 0.09, green: 0.10, blue: 0.11, alpha: 1) {
@@ -220,6 +224,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             standaloneViewLayouts = try renderer.layout(
                 items: items,
                 font: font,
+                lineHeight: lineHeight,
                 textColor: textColor,
                 lineSpacing: lineSpacing,
                 maxBlur: maxBlur,
