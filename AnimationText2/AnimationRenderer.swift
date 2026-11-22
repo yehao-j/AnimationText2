@@ -27,6 +27,7 @@ final class AnimationRenderer: NSObject {
     private var viewportSize = CGSize.zero
     private var startTime = CACurrentMediaTime() + 0.15
     private var nextItemHeightIndex = 0
+    private var completionReported = false
     /// 当前动画时间轴的起点，供 standalone view 把 delay 换算成实际等待时长。
     var timelineStartTime: CFTimeInterval { startTime }
     var debugInstanceCount: Int { atlas?.instances.count ?? 0 }
@@ -105,8 +106,23 @@ final class AnimationRenderer: NSObject {
         )
         self.atlas = atlas
         self.viewportSize = viewportSize
+        completionReported = false
         if !preservingTimeline { replay() }
         return atlas.standaloneViewLayouts
+    }
+
+    func updateViewportSize(_ size: CGSize) {
+        let heightOffset = Float(size.height - viewportSize.height)
+        if let instanceBuffer, let atlas {
+            let instances = instanceBuffer.contents().bindMemory(
+                to: AnimationInstance.self,
+                capacity: atlas.instances.count
+            )
+            for index in 0..<atlas.instances.count {
+                instances[index].origin.y += heightOffset
+            }
+        }
+        viewportSize = size
     }
 
     func replay() {
@@ -127,7 +143,10 @@ final class AnimationRenderer: NSObject {
         let animationFinished = atlas.hasEnd && rawElapsed >= atlas.animationDuration
 
         if atlas.instances.isEmpty {
-            if animationFinished { onAnimationComplete?() }
+            if animationFinished, !completionReported {
+                completionReported = true
+                onAnimationComplete?()
+            }
             return
         }
         guard let instanceBuffer,
@@ -214,7 +233,8 @@ final class AnimationRenderer: NSObject {
         if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
             onStats?(snapshot)
         }
-        if animationFinished {
+        if animationFinished, !completionReported {
+            completionReported = true
             onAnimationComplete?()
         }
     }

@@ -203,6 +203,16 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
         guard let renderer, !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
         let contentRect = bounds
         guard contentRect.width > 0, contentRect.height > 0 else { return }
+        if !pendingAppend,
+           contentRect.origin == lastContentRect.origin,
+           contentRect.width == lastContentRect.width,
+           contentRect.height != lastContentRect.height,
+           contentScaleFactor == lastContentScale {
+            // 仅高度变化时沿用图集和 standalone frame，按高度差平移实例以保持顶部位置。
+            renderer.updateViewportSize(bounds.size)
+            lastContentRect = contentRect
+            return
+        }
         guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
         let preservingTimeline = pendingAppend
 
@@ -338,6 +348,9 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
 
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         layoutItemsIfNeeded()
+        if isPaused {
+            draw(in: view)
+        }
     }
 
     public func draw(in view: MTKView) {

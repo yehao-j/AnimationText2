@@ -31,7 +31,7 @@ struct AnimationConfiguration {
 }
 
 struct AnimationInstance {
-    let origin: SIMD2<Float>
+    var origin: SIMD2<Float>
     let size: SIMD2<Float>
     let uvOrigin: SIMD2<Float>
     let uvSize: SIMD2<Float>
