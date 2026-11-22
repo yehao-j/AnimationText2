@@ -79,14 +79,102 @@ private extension Unicode.Scalar {
     }
 }
 
-public final class MetalTextView: MTKView, MTKViewDelegate {
-    public var onStats: ((PerformanceSnapshot) -> Void)?
+public final class MetalTextView: UIView {
+    private let metalView: MetalContentView
+
+    public var onStats: ((PerformanceSnapshot) -> Void)? {
+        didSet { metalView.onStats = onStats }
+    }
     /// 收到 end 且所有 item 动画完成后回调，此时视图高度已调整为内容高度。
-    public var onAnimationComplete: (() -> Void)?
+    public var onAnimationComplete: (() -> Void)? {
+        didSet { metalView.onAnimationComplete = onAnimationComplete }
+    }
     /// 每行首个 item 渲染前回调截至该行的累计高度，相同高度不重复回调。
     public var heightBlock: ((CGFloat) -> Void)?
-    public var onError: ((String) -> Void)?
-    public private(set) var initializationError: String?
+    public var onError: ((String) -> Void)? {
+        didSet { metalView.onError = onError }
+    }
+    public var initializationError: String? { metalView.initializationError }
+
+    /// 整段设置会重置内容并从头播放；流式追加请用 `append(items:)`。
+    public var items: [MetalAnimationItem] {
+        get { metalView.items }
+        set { metalView.items = newValue }
+    }
+    public var font: UIFont {
+        get { metalView.font }
+        set { metalView.font = newValue }
+    }
+    /// 普通文本行的行高；独占一行的 standaloneView 使用自身高度。
+    public var lineHeight: CGFloat {
+        get { metalView.lineHeight }
+        set { metalView.lineHeight = newValue }
+    }
+    public var textColor: UIColor {
+        get { metalView.textColor }
+        set { metalView.textColor = newValue }
+    }
+    public var lineSpacing: CGFloat {
+        get { metalView.lineSpacing }
+        set { metalView.lineSpacing = newValue }
+    }
+    /// 最大模糊半径（pt）。0 表示无模糊。
+    public var maxBlur: Float {
+        get { metalView.maxBlur }
+        set { metalView.maxBlur = newValue }
+    }
+    public override var backgroundColor: UIColor? {
+        didSet { metalView.backgroundColor = backgroundColor }
+    }
+
+    public init(frame frameRect: CGRect, device: MTLDevice?) {
+        metalView = MetalContentView(frame: CGRect(origin: .zero, size: frameRect.size), device: device)
+        super.init(frame: CGRect(
+            x: frameRect.minX,
+            y: frameRect.minY,
+            width: frameRect.width,
+            height: AnimationConfiguration.lineHeight
+        ))
+        clipsToBounds = true
+        addSubview(metalView)
+        metalView.onHeightChange = { [weak self] height in
+            guard let self else { return }
+            self.frame.size.height = height
+            self.heightBlock?(height)
+        }
+    }
+
+    public required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        guard metalView.bounds.width != bounds.width else { return }
+        metalView.frame.size.width = bounds.width
+    }
+
+    /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
+    /// 时间轴；同一 runloop 内的多次追加合并为一次排版重建。需在主线程调用。
+    public func append(items newItems: [MetalAnimationItem]) {
+        metalView.append(items: newItems)
+    }
+
+    public func layoutItemsIfNeeded() {
+        metalView.layoutItemsIfNeeded()
+    }
+
+    public func replay() {
+        metalView.replay()
+    }
+}
+
+private final class MetalContentView: MTKView, MTKViewDelegate {
+    var onStats: ((PerformanceSnapshot) -> Void)?
+    var onAnimationComplete: (() -> Void)?
+    var onHeightChange: ((CGFloat) -> Void)?
+    var onError: ((String) -> Void)?
+    private(set) var initializationError: String?
 
     private var storedItems: [MetalAnimationItem] = []
     /// 整段设置会重置内容并从头播放；流式追加请用 `append(items:)`。
@@ -196,10 +284,9 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
             renderer.onItemAnimationStart = { [weak self] height in
                 guard let self else { return }
                 self.renderedContentHeight = height
-                guard let heightBlock = self.heightBlock,
-                      self.lastHeightBlockValue != height else { return }
+                guard self.lastHeightBlockValue != height else { return }
                 self.lastHeightBlockValue = height
-                heightBlock(height)
+                self.onHeightChange?(height)
             }
             self.renderer = renderer
         } catch {

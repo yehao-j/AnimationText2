@@ -12,20 +12,17 @@ final class ViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
-        let v = UIView(frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 21))
-        let metalView = MetalTextView(frame: CGRect(x: 0, y: 0, width: view.bounds.width - 40, height: 500), device: nil)
-        v.addSubview(metalView)
-        v.clipsToBounds = true
-        v.layer.borderWidth = 1
-        v.layer.borderColor = UIColor.green.cgColor
-        view.addSubview(v)
+        let metalView = MetalTextView(
+            frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 500),
+            device: nil
+        )
+        metalView.layer.borderWidth = 1
+        metalView.layer.borderColor = UIColor.green.cgColor
+        view.addSubview(metalView)
 
         metalView.heightBlock = {
             print("-----", $0)
-            v.frame = CGRect(x: 20, y: 100, width: self.view.bounds.width - 40, height: $0)
         }
-        metalView.layer.borderColor = UIColor.red.cgColor
-        metalView.layer.borderWidth = 1
         self.metalView = metalView
         streamingBatches = DemoText.streamingBatches(
             staticViews: [
