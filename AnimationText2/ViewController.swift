@@ -13,7 +13,7 @@ final class ViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
         let v = UIView(frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 21))
-        let metalView = MetalTextView(frame: CGRect(x: 0, y: 0, width: view.bounds.width - 40, height: 2500), device: nil)
+        let metalView = MetalTextView(frame: CGRect(x: 0, y: 0, width: view.bounds.width - 40, height: 500), device: nil)
         v.addSubview(metalView)
         v.clipsToBounds = true
         v.layer.borderWidth = 1
@@ -46,13 +46,8 @@ final class ViewController: UIViewController {
             )
             self?.detailLabel.text = "\(snapshot.itemCount) 个动画单元 · 2 draw calls/帧 · 单核 = 100%"
         }
-        metalView.onAnimationComplete = { [weak self, weak v] in
+        metalView.onAnimationComplete = { [weak self] in
             self?.statsLabel.text = "动画已结束 · Metal 已暂停"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak v] in
-                print("------完成")
-                guard let self, let v else { return }
-                self.metalView.frame.size.height = v.bounds.height
-            }
         }
         metalView.onError = { [weak self] message in
             self?.showError(title: "排版失败", message: message)

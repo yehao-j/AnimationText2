@@ -81,10 +81,11 @@ private extension Unicode.Scalar {
 
 public final class MetalTextView: MTKView, MTKViewDelegate {
     public var onStats: ((PerformanceSnapshot) -> Void)?
+    /// 收到 end 且所有 item 动画完成后回调，此时视图高度已调整为内容高度。
     public var onAnimationComplete: (() -> Void)?
-    public var onError: ((String) -> Void)?
-    /// item 开始动画时回调截至当前行的累计高度，相同高度不重复回调。
+    /// 每行首个 item 渲染前回调截至该行的累计高度，相同高度不重复回调。
     public var heightBlock: ((CGFloat) -> Void)?
+    public var onError: ((String) -> Void)?
     public private(set) var initializationError: String?
 
     private var storedItems: [MetalAnimationItem] = []
@@ -160,6 +161,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
     private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
     private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
     private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
+    private var renderedContentHeight: CGFloat = 0
     private var lastHeightBlockValue: CGFloat?
 
     public override init(frame frameRect: CGRect, device: MTLDevice?) {
@@ -184,11 +186,17 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
                 self?.onStats?(snapshot)
             }
             renderer.onAnimationComplete = { [weak self] in
-                self?.isPaused = true
-                self?.onAnimationComplete?()
+                guard let self else { return }
+                self.isPaused = true
+                self.frame.size.height = self.renderedContentHeight
+                self.layoutItemsIfNeeded()
+                self.onAnimationComplete?()
+                print("MetalTextView 整体高度是：", self.renderedContentHeight)
             }
             renderer.onItemAnimationStart = { [weak self] height in
-                guard let self, let heightBlock = self.heightBlock,
+                guard let self else { return }
+                self.renderedContentHeight = height
+                guard let heightBlock = self.heightBlock,
                       self.lastHeightBlockValue != height else { return }
                 self.lastHeightBlockValue = height
                 heightBlock(height)
@@ -347,6 +355,7 @@ public final class MetalTextView: MTKView, MTKViewDelegate {
 
     private func invalidateContentLayout() {
         pendingAppend = false
+        renderedContentHeight = 0
         lastContentRect = .null
         layoutItemsIfNeeded()
     }
