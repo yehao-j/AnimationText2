@@ -18,6 +18,8 @@ public enum MetalAnimationItem {
         alignment: MetalStandaloneViewAlignment = .center,
         completion: (() -> Void)? = nil
     )
+    /// 标记流式内容结束；不参与排版，全部动画完成后触发 onAnimationComplete。
+    case end
 }
 
 public extension MetalAnimationItem {

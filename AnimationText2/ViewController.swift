@@ -7,26 +7,25 @@ final class ViewController: UIViewController {
     private let standaloneIndicator = UIActivityIndicatorView(style: .medium)
     private var streamingBatches: [[MetalAnimationItem]] = []
     private var streamingWorkItem: DispatchWorkItem?
-    private var appendRemainingAfterCompletion = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
-        let metalView = MetalTextView(frame: view.bounds, device: nil)
+        let v = UIView(frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 21))
+        let metalView = MetalTextView(frame: CGRect(x: 0, y: 0, width: view.bounds.width - 40, height: 5000), device: nil)
+        v.addSubview(metalView)
+        v.clipsToBounds = true
+        v.layer.borderWidth = 1
+        v.layer.borderColor = UIColor.green.cgColor
+        view.addSubview(v)
+
         metalView.heightBlock = {
             print("-----", $0)
+            v.frame = CGRect(x: 20, y: 100, width: self.view.bounds.width - 40, height: $0)
         }
         metalView.layer.borderColor = UIColor.red.cgColor
         metalView.layer.borderWidth = 1
-        metalView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(metalView)
-        NSLayoutConstraint.activate([
-            metalView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            metalView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            metalView.topAnchor.constraint(equalTo: view.topAnchor, constant: 100),
-            metalView.heightAnchor.constraint(equalToConstant: 2500)
-        ])
         self.metalView = metalView
         streamingBatches = DemoText.streamingBatches(
             staticViews: [
@@ -48,11 +47,7 @@ final class ViewController: UIViewController {
             self?.detailLabel.text = "\(snapshot.itemCount) 个动画单元 · 2 draw calls/帧 · 单核 = 100%"
         }
         metalView.onAnimationComplete = { [weak self] in
-            guard let self else { return }
-            self.statsLabel.text = "动画已结束 · Metal 已暂停"
-            guard self.appendRemainingAfterCompletion else { return }
-            self.appendRemainingAfterCompletion = false
-            self.appendRemainingItems()
+            self?.statsLabel.text = "动画已结束 · Metal 已暂停"
         }
         metalView.onError = { [weak self] message in
             self?.showError(title: "排版失败", message: message)
@@ -71,21 +66,9 @@ final class ViewController: UIViewController {
     private func startStreaming() {
         streamingWorkItem?.cancel()
         standaloneIndicator.stopAnimating()
-        appendRemainingAfterCompletion = false
         guard streamingBatches.count > 1 else { return }
         metalView.items = streamingBatches[0]
-        // 第一批还在播放时追加第二批，之后的追加等全部播完再延迟进行。
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.metalView.append(items: self.streamingBatches[1])
-            self.appendRemainingAfterCompletion = true
-        }
-        streamingWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
-    }
-
-    private func appendRemainingItems() {
-        let remaining = streamingBatches.dropFirst(2).flatMap { $0 }
+        let remaining = streamingBatches.dropFirst().flatMap { $0 }
         let workItem = DispatchWorkItem { [weak self] in
             self?.metalView.append(items: remaining)
         }
@@ -256,6 +239,7 @@ private enum DemoText {
             batches.append(Array(bodyItems[index..<min(index + count, bodyItems.count)]))
             index += count
         }
+        batches[batches.count - 1].append(.end)
         return batches
     }
 }

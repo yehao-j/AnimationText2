@@ -124,7 +124,7 @@ final class AnimationRenderer: NSObject {
             nextItemHeightIndex += 1
             onItemAnimationStart?(itemHeight.height)
         }
-        let animationFinished = rawElapsed >= atlas.animationDuration
+        let animationFinished = atlas.hasEnd && rawElapsed >= atlas.animationDuration
 
         if atlas.instances.isEmpty {
             if animationFinished { onAnimationComplete?() }

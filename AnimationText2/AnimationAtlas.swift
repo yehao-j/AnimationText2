@@ -62,6 +62,7 @@ struct AnimationAtlas {
     let sequenceDelays: [Float]
     let blurAtlasSize: CGSize
     let animationDuration: Float
+    let hasEnd: Bool
     let pixelsPerPoint: Float
     let maxBlur: Float
 }
@@ -231,6 +232,8 @@ enum AnimationAtlasBuilder {
                     delay: standaloneLayout.delay,
                     height: standaloneLayout.frame.maxY
                 ))
+            case .end:
+                description = nil
             }
             if let description {
                 descriptions.append(description)
@@ -280,6 +283,10 @@ enum AnimationAtlasBuilder {
             standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
             rasters: rasters,
+            hasEnd: items.contains { item in
+                if case .end = item { return true }
+                return false
+            },
             maxBlur: maxBlur,
             contentScale: scale,
             device: device
@@ -388,7 +395,7 @@ enum AnimationAtlasBuilder {
                     string: "\u{FFFC}",
                     attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
                 ))
-            case .standaloneView:
+            case .standaloneView, .end:
                 continue
             }
         }
@@ -667,6 +674,7 @@ enum AnimationAtlasBuilder {
         standaloneViewLayouts: [StandaloneViewLayout],
         itemHeights: [AnimationItemHeight],
         rasters: [RasterKey: Raster],
+        hasEnd: Bool,
         maxBlur: Float,
         contentScale: CGFloat,
         device: MTLDevice
@@ -812,6 +820,7 @@ enum AnimationAtlasBuilder {
             sequenceDelays: sequenceDelays,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
+            hasEnd: hasEnd,
             pixelsPerPoint: Float(contentScale),
             maxBlur: maxBlur
         )
