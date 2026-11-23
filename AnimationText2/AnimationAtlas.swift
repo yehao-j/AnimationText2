@@ -12,13 +12,17 @@ struct AnimationConfiguration {
 //    static let stagger: Float = 0.2
     
     /// 动画开始前的延迟时间，单位为秒。
-    static let startDelay: TimeInterval = 0
+    static let startDelay: TimeInterval = 2
     /// 动画单元在开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 10
     /// 文本字体。
     static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
     /// 普通文本行的行高，默认为当前字体行高向上取整，单位为点。
     static let lineHeight = ceil(font.lineHeight)
+    /// 文本颜色。
+    static let textColor = UIColor(red: 0.09, green: 0.10, blue: 0.11, alpha: 1)
+    /// 最大模糊半径（pt）。0 表示无模糊。
+    static let maxBlur: Float = 8
     /// 字符间距，单位为点。
     static let letterSpacing: CGFloat = 0
     /// 相邻文本行之间的额外间距，单位为点。

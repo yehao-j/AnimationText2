@@ -113,20 +113,6 @@ final class AnimationRenderer: NSObject {
         return atlas.standaloneViewLayouts
     }
 
-    func updateViewportSize(_ size: CGSize) {
-        let heightOffset = Float(size.height - viewportSize.height)
-        if let instanceBuffer, let atlas {
-            let instances = instanceBuffer.contents().bindMemory(
-                to: AnimationInstance.self,
-                capacity: atlas.instances.count
-            )
-            for index in 0..<atlas.instances.count {
-                instances[index].origin.y += heightOffset
-            }
-        }
-        viewportSize = size
-    }
-
     func replay() {
         startTime = CACurrentMediaTime() + AnimationConfiguration.startDelay
         nextItemHeightIndex = 0

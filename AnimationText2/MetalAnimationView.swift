@@ -103,33 +103,13 @@ public final class MetalAnimationView: UIView {
         get { metalView.items }
         set { metalView.items = newValue }
     }
-    public var font: UIFont {
-        get { metalView.font }
-        set { metalView.font = newValue }
-    }
-    /// 普通文本行的行高；独占一行的 standaloneView 使用自身高度。
-    public var lineHeight: CGFloat {
-        get { metalView.lineHeight }
-        set { metalView.lineHeight = newValue }
-    }
-    public var textColor: UIColor {
-        get { metalView.textColor }
-        set { metalView.textColor = newValue }
-    }
-    public var lineSpacing: CGFloat {
-        get { metalView.lineSpacing }
-        set { metalView.lineSpacing = newValue }
-    }
-    /// 最大模糊半径（pt）。0 表示无模糊。
-    public var maxBlur: Float {
-        get { metalView.maxBlur }
-        set { metalView.maxBlur = newValue }
-    }
     public override var backgroundColor: UIColor? {
         didSet { metalView.backgroundColor = backgroundColor }
     }
 
     public init(frame frameRect: CGRect, device: MTLDevice?) {
+        // 排版宽度在创建时确定且不再变化，必须传入有效的 frame。
+        precondition(frameRect.width > 0, "MetalAnimationView 需要有效的 frame，width 不能为 0")
         metalView = MetalContentView(frame: CGRect(origin: .zero, size: frameRect.size), device: device)
         super.init(frame: CGRect(
             x: frameRect.minX,
@@ -148,12 +128,6 @@ public final class MetalAnimationView: UIView {
 
     public required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    public override func layoutSubviews() {
-        super.layoutSubviews()
-        guard metalView.bounds.width != bounds.width else { return }
-        metalView.frame.size.width = bounds.width
     }
 
     /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
@@ -187,7 +161,16 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             invalidateContentLayout()
         }
     }
-    private var pendingAppend = false
+    /// 待处理的排版类型；nil 表示无需排版。
+    private enum PendingLayout {
+        /// 流式追加：保留时间轴增量重排，旧实例沿用原 delay 不重播。
+        case append
+        /// 整段设置 / replay：全量重建并从头播放。
+        case rebuild
+    }
+    /// append 置 .append，invalidateContentLayout 置 .rebuild，排版成功后清除。
+    private var pendingLayout: PendingLayout?
+    /// append 置位：合并同一 runloop 内的多次追加，只调度一次异步排版；异步任务执行前清除。
     private var appendLayoutScheduled = false
 
     /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
@@ -195,7 +178,7 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
     public func append(items newItems: [MetalAnimationItem]) {
         guard !newItems.isEmpty else { return }
         storedItems.append(contentsOf: newItems)
-        pendingAppend = true
+        pendingLayout = .append
         guard !appendLayoutScheduled else { return }
         appendLayoutScheduled = true
         DispatchQueue.main.async { [weak self] in
@@ -203,24 +186,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             self.appendLayoutScheduled = false
             self.layoutItemsIfNeeded()
         }
-    }
-    /// 修改排版配置会重新排版并重建图集。
-    public var font = AnimationConfiguration.font {
-        didSet { invalidateContentLayout() }
-    }
-    /// 普通文本行的行高；独占一行的 standaloneView 使用自身高度。
-    public var lineHeight: CGFloat = AnimationConfiguration.lineHeight {
-        didSet { invalidateContentLayout() }
-    }
-    public var textColor: UIColor = UIColor(red: 0.09, green: 0.10, blue: 0.11, alpha: 1) {
-        didSet { invalidateContentLayout() }
-    }
-    public var lineSpacing: CGFloat = AnimationConfiguration.lineSpacing {
-        didSet { invalidateContentLayout() }
-    }
-    /// 最大模糊半径（pt）。0 表示无模糊。
-    public var maxBlur: Float = 8 {
-        didSet { invalidateContentLayout() }
     }
     public override var backgroundColor: UIColor? {
         didSet {
@@ -243,7 +208,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
     }
 
     private var renderer: AnimationRenderer?
-    private var lastContentRect = CGRect.null
     private var lastContentScale: CGFloat = 0
     private var standaloneViewLayouts: [StandaloneViewLayout] = []
     private var timelineStartTime = CACurrentMediaTime()
@@ -278,8 +242,8 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             renderer.onAnimationComplete = { [weak self] in
                 guard let self else { return }
                 self.isPaused = true
-                self.frame.size.height = self.renderedContentHeight
-                self.layoutItemsIfNeeded()
+//                self.frame.size.height = self.renderedContentHeight
+//                self.layoutItemsIfNeeded()
                 self.onAnimationComplete?()
                 print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
             }
@@ -300,41 +264,39 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// 按需对当前 items 执行排版。调用入口：流式追加合并后的异步排版、首次进入窗口、
+    /// invalidateContentLayout 触发的重排。
+    ///
+    /// bounds 在创建时固定不变，因此只有两种情况需要排版：
+    /// - 流式追加（pendingLayout == .append）：全量重建图集但保留时间轴，旧实例沿用原
+    ///   delay 不重播，新实例接续当前时间轴。
+    /// - contentScaleFactor 变化（如视图进入窗口时从 1.0 变为实际屏幕 scale），或
+    ///   items 整段设置 / replay 经 invalidateContentLayout 置 pendingLayout = .rebuild
+    ///   强制重排：全量重建并从头播放。
+    /// 排版失败通过 onError 上报，成功后恢复渲染。
     public func layoutItemsIfNeeded() {
         guard let renderer, !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
-        let contentRect = bounds
-        guard contentRect.width > 0, contentRect.height > 0 else { return }
-        if !pendingAppend,
-           contentRect.origin == lastContentRect.origin,
-           contentRect.width == lastContentRect.width,
-           contentRect.height != lastContentRect.height,
-           contentScaleFactor == lastContentScale {
-            // 仅高度变化时沿用图集和 standalone frame，按高度差平移实例以保持顶部位置。
-            renderer.updateViewportSize(bounds.size)
-            lastContentRect = contentRect
-            return
-        }
-        guard pendingAppend || contentRect != lastContentRect || contentScaleFactor != lastContentScale else { return }
-        let preservingTimeline = pendingAppend
+        guard pendingLayout != nil || contentScaleFactor != lastContentScale else { return }
+        let preservingTimeline = pendingLayout == .append
 
+        // 全量重建图集：追加时保留时间轴避免旧内容重播，整段设置时从头播放。
         do {
             standaloneViewLayouts = try renderer.layout(
                 items: items,
-                font: font,
-                lineHeight: lineHeight,
-                textColor: textColor,
-                lineSpacing: lineSpacing,
-                maxBlur: maxBlur,
-                contentRect: contentRect,
+                font: AnimationConfiguration.font,
+                lineHeight: AnimationConfiguration.lineHeight,
+                textColor: AnimationConfiguration.textColor,
+                lineSpacing: AnimationConfiguration.lineSpacing,
+                maxBlur: AnimationConfiguration.maxBlur,
+                contentRect: bounds,
                 viewportSize: bounds.size,
                 contentScale: contentScaleFactor,
                 preservingTimeline: preservingTimeline
             )
             timelineStartTime = renderer.timelineStartTime
             layoutStandaloneViews(preservingTimeline: preservingTimeline)
-            lastContentRect = contentRect
             lastContentScale = contentScaleFactor
-            pendingAppend = false
+            pendingLayout = nil
             isPaused = false
         } catch {
             onError?(error.localizedDescription)
@@ -412,7 +374,7 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             standaloneAnimators[identifier]?.stopAnimation(true)
             container.isHidden = true
             container.alpha = 0
-            blurView.effect = maxBlur > 0 ? UIBlurEffect(style: .regular) : nil
+            blurView.effect = AnimationConfiguration.maxBlur > 0 ? UIBlurEffect(style: .regular) : nil
             container.transform = CGAffineTransform(
                 translationX: 0,
                 y: CGFloat(AnimationConfiguration.travelDistance)
@@ -443,9 +405,8 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
     }
 
     private func invalidateContentLayout() {
-        pendingAppend = false
+        pendingLayout = .rebuild
         renderedContentHeight = 0
-        lastContentRect = .null
         layoutItemsIfNeeded()
     }
 
