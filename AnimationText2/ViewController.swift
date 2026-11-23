@@ -218,7 +218,6 @@ private enum DemoText {
 
             .text("单"),
             .text("词"),
-            
             .inlineView(inlineSpinner, completion: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     inlineIndicator.startAnimating()
