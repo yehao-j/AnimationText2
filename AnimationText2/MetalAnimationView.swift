@@ -10,9 +10,11 @@ public enum MetalStandaloneViewAlignment {
 
 public enum MetalAnimationItem {
     case text(String)
-    /// 作为行内元素紧跟前一个元素排版，直接读取 view.bounds.size，并在当前行内垂直居中。
-    case staticView(UIView)
-    /// 原生 View 独占一行并按 alignment 对齐；直接读取 view.bounds.size，宽度夹紧到 MetalTextView 宽度。
+    /// 作为行内元素紧跟前一个元素排版，直接读取 view.bounds.size，并在当前行内垂直居中；
+    /// 保留原生 UIKit 内部动画（如指示器旋转）；入场动画与 standaloneView 同款由 UIKit 按时间轴播放，
+    /// 播完回调 completion（流式追加不重播旧内容，不会重复回调）。
+    case inlineView(UIView, completion: (() -> Void)? = nil)
+    /// 原生 View 独占一行并按 alignment 对齐；直接读取 view.bounds.size，宽度夹紧到 MetalAnimationView 宽度。
     case standaloneView(
         UIView,
         alignment: MetalStandaloneViewAlignment = .center,
@@ -79,7 +81,7 @@ private extension Unicode.Scalar {
     }
 }
 
-public final class MetalTextView: UIView {
+public final class MetalAnimationView: UIView {
     private let metalView: MetalContentView
 
     public var onStats: ((PerformanceSnapshot) -> Void)? {
@@ -279,7 +281,7 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
                 self.frame.size.height = self.renderedContentHeight
                 self.layoutItemsIfNeeded()
                 self.onAnimationComplete?()
-                print("MetalTextView 整体高度是：", self.renderedContentHeight)
+                print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
             }
             renderer.onItemAnimationStart = { [weak self] height in
                 guard let self else { return }

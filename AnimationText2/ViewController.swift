@@ -1,10 +1,11 @@
 import UIKit
 
 final class ViewController: UIViewController {
-    private var metalView: MetalTextView!
+    private var metalView: MetalAnimationView!
     private let statsLabel = UILabel()
     private let detailLabel = UILabel()
     private let standaloneIndicator = UIActivityIndicatorView(style: .medium)
+    private let inlineSpinnerIndicator = UIActivityIndicatorView(style: .medium)
     private var streamingBatches: [[MetalAnimationItem]] = []
     private var streamingWorkItem: DispatchWorkItem?
 
@@ -12,7 +13,7 @@ final class ViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
-        let metalView = MetalTextView(
+        let metalView = MetalAnimationView(
             frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 500),
             device: nil
         )
@@ -25,11 +26,13 @@ final class ViewController: UIViewController {
         }
         self.metalView = metalView
         streamingBatches = DemoText.streamingBatches(
-            staticViews: [
-                makeStaticBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
-                makeStaticBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
-                makeStaticBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
+            inlineViews: [
+                makeBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
+                makeBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
+                makeBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
             ],
+            inlineSpinner: makeInlineSpinnerBox(indicator: inlineSpinnerIndicator),
+            inlineIndicator: inlineSpinnerIndicator,
             standaloneView: makeStandaloneView(),
             standaloneIndicator: standaloneIndicator
         )
@@ -63,6 +66,7 @@ final class ViewController: UIViewController {
     private func startStreaming() {
         streamingWorkItem?.cancel()
         standaloneIndicator.stopAnimating()
+        inlineSpinnerIndicator.stopAnimating()
         guard streamingBatches.count > 1 else { return }
         metalView.items = streamingBatches[0]
         let remaining = streamingBatches.dropFirst().flatMap { $0 }
@@ -73,7 +77,7 @@ final class ViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
-    private func makeStaticBadge(title: String, color: UIColor) -> UIView {
+    private func makeBadge(title: String, color: UIColor) -> UIView {
         let badge = UIView(frame: CGRect(x: 0, y: 0, width: 70, height: 20))
         badge.backgroundColor = color
         badge.layer.cornerRadius = 9
@@ -91,6 +95,15 @@ final class ViewController: UIViewController {
             label.centerYAnchor.constraint(equalTo: badge.centerYAnchor)
         ])
         return badge
+    }
+
+    private func makeInlineSpinnerBox(indicator: UIActivityIndicatorView) -> UIView {
+        let box = UIView(frame: CGRect(x: 0, y: 0, width: 24, height: 20))
+        indicator.color = UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)
+        indicator.hidesWhenStopped = false
+        indicator.frame = CGRect(x: 0, y: 0, width: 20, height: 20)
+        box.addSubview(indicator)
+        return box
     }
 
     private func makeStandaloneView() -> UIView {
@@ -181,16 +194,18 @@ final class ViewController: UIViewController {
 }
 
 private enum DemoText {
-    /// 第一批是静态 View 前缀；正文在外部拆分后按 token 边界随机分成小批次，模拟 SSE 分片推送。
+    /// 第一批是行内 View 前缀；正文在外部拆分后按 token 边界随机分成小批次，模拟 SSE 分片推送。
     static func streamingBatches(
-        staticViews: [UIView],
+        inlineViews: [UIView],
+        inlineSpinner: UIView,
+        inlineIndicator: UIActivityIndicatorView,
         standaloneView: UIView,
         standaloneIndicator: UIActivityIndicatorView
     ) -> [[MetalAnimationItem]] {
         let prefix: [MetalAnimationItem] = [
             .text("汉"),
             .text("字"),
-            .staticView(staticViews[0]),
+            .inlineView(inlineViews[0]),
             .text("与"),
             .text(" Metal "),
             .text("一起"),
@@ -203,7 +218,13 @@ private enum DemoText {
 
             .text("单"),
             .text("词"),
-            .staticView(staticViews[1]),
+            
+            .inlineView(inlineSpinner, completion: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    inlineIndicator.startAnimating()
+                }
+            }),
+            .inlineView(inlineViews[1]),
             .text("夹在"),
             .text(" Chinese "),
             .text("和"),
@@ -213,7 +234,7 @@ private enum DemoText {
 
             .text("静"),
             .text("态"),
-            .staticView(staticViews[2]),
+            .inlineView(inlineViews[2]),
             .text("也能"),
             .text("和"),
             .text(" Text "),
@@ -225,7 +246,7 @@ private enum DemoText {
         let content = """
         外部按汉字或单词拆   分文本，内部保持整 段排版，再依次播放入场动画。
 
-        文字、单词和静态快照共用位移、透明度与高斯模糊效果。
+        文字、单词和行内视图共用同一时间轴的入场动画。
         Streaming tokens arrive over SSE, and each word animates as it lands.
         """
         let bodyItems = MetalAnimationItem.tokenize(content)

@@ -67,16 +67,12 @@ struct AnimationAtlas {
 enum AnimationAtlasError: LocalizedError {
     case cannotCreateContext
     case cannotCreateTexture
-    case cannotRasterizeView
-    case invalidViewFrame
     case atlasOverflow
 
     var errorDescription: String? {
         switch self {
         case .cannotCreateContext: return "无法创建动画图集上下文"
         case .cannotCreateTexture: return "无法创建 Metal 动画纹理"
-        case .cannotRasterizeView: return "无法生成静态 View 快照"
-        case .invalidViewFrame: return "静态 View 的 frame 必须大于 0"
         case .atlasOverflow: return "动画图集超出纹理尺寸限制"
         }
     }
@@ -92,7 +88,7 @@ enum AnimationAtlasBuilder {
 
     private struct TextLayout {
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
-        var staticFrames: [Int: CGRect] = [:]
+        var inlineFrames: [Int: CGRect] = [:]
         var standaloneFrames: [Int: CGRect] = [:]
         var itemHeights: [Int: CGFloat] = [:]
         var lineFrames: [CGRect] = []
@@ -100,13 +96,13 @@ enum AnimationAtlasBuilder {
 
     private struct TextSegment {
         let glyphsByItem: [Int: [PositionedGlyph]]
-        let staticFrames: [Int: CGRect]
+        let inlineFrames: [Int: CGRect]
         let itemHeights: [Int: CGFloat]
         let lineFrames: [CGRect]
         let height: CGFloat
     }
 
-    private struct StaticItem {
+    private struct InlineItem {
         let itemIndex: Int
         let size: CGSize
     }
@@ -135,7 +131,6 @@ enum AnimationAtlasBuilder {
 
     private enum RasterKey: Hashable {
         case text(String, [GlyphKey])
-        case image(ObjectIdentifier, CGSize)
         case lineBackground(Int)
     }
 
@@ -205,19 +200,20 @@ enum AnimationAtlasBuilder {
                     delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
-            case .staticView(let view):
-                if let frame = textLayout.staticFrames[itemIndex] {
-                    description = try makeViewDescription(
-                        view: view,
-                        displayFrame: frame,
-                        viewportSize: viewportSize,
-                        contentScale: scale,
-                        delay: delay(for: descriptions.count + standaloneViewLayouts.count),
-                        rasters: &rasters
-                    )
-                } else {
-                    description = nil
-                }
+            case .inlineView(let view, let completion):
+                description = nil
+                guard let frame = textLayout.inlineFrames[itemIndex] else { break }
+                let inlineLayout = StandaloneViewLayout(
+                    view: view,
+                    frame: frame,
+                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
+                    completion: completion
+                )
+                standaloneViewLayouts.append(inlineLayout)
+                itemHeights.append(AnimationItemHeight(
+                    delay: inlineLayout.delay,
+                    height: textLayout.itemHeights[itemIndex]!
+                ))
             case .standaloneView(let view, _, let completion):
                 description = nil
                 let standaloneLayout = StandaloneViewLayout(
@@ -351,8 +347,8 @@ enum AnimationAtlasBuilder {
             for (itemIndex, glyphs) in segment.glyphsByItem {
                 layout.glyphsByItem[itemIndex, default: []].append(contentsOf: glyphs)
             }
-            for (itemIndex, frame) in segment.staticFrames {
-                layout.staticFrames[itemIndex] = frame
+            for (itemIndex, frame) in segment.inlineFrames {
+                layout.inlineFrames[itemIndex] = frame
             }
             for (itemIndex, height) in segment.itemHeights {
                 layout.itemHeights[itemIndex] = height
@@ -379,7 +375,7 @@ enum AnimationAtlasBuilder {
     ) -> TextSegment {
         let attributedText = NSMutableAttributedString()
         var textItems: [TextItem] = []
-        var staticItems: [Int: StaticItem] = [:]
+        var inlineItems: [Int: InlineItem] = [:]
 
         for itemIndex in range {
             switch items[itemIndex] {
@@ -389,9 +385,9 @@ enum AnimationAtlasBuilder {
                     range: NSRange(location: attributedText.length, length: text.utf16.count)
                 ))
                 attributedText.append(NSAttributedString(string: text))
-            case .staticView(let view):
+            case .inlineView(let view, _):
                 let size = view.bounds.size
-                staticItems[attributedText.length] = StaticItem(itemIndex: itemIndex, size: size)
+                inlineItems[attributedText.length] = InlineItem(itemIndex: itemIndex, size: size)
                 let delegate = makeInlineViewDelegate(width: max(0, size.width))
                 attributedText.append(NSAttributedString(
                     string: "\u{FFFC}",
@@ -405,7 +401,7 @@ enum AnimationAtlasBuilder {
         guard attributedText.length > 0 else {
             return TextSegment(
                 glyphsByItem: [:],
-                staticFrames: [:],
+                inlineFrames: [:],
                 itemHeights: [:],
                 lineFrames: [],
                 height: 0
@@ -435,7 +431,7 @@ enum AnimationAtlasBuilder {
         let textHeight = ceil(suggestedSize.height)
         let visibleHeight = min(textHeight, max(0, top - contentRect.minY))
         var glyphsByItem: [Int: [PositionedGlyph]] = [:]
-        var staticFrames: [Int: CGRect] = [:]
+        var inlineFrames: [Int: CGRect] = [:]
         var itemHeights: [Int: CGFloat] = [:]
         var lineFrames: [CGRect] = []
 
@@ -469,17 +465,17 @@ enum AnimationAtlasBuilder {
                 let runs = CTLineGetGlyphRuns(line) as! [CTRun]
                 for run in runs {
                     let runRange = CTRunGetStringRange(run)
-                    if let staticItem = staticItems[runRange.location] {
+                    if let inlineItem = inlineItems[runRange.location] {
                         var position = CGPoint.zero
                         CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
-                        let displayHeight = max(0, staticItem.size.height)
-                        staticFrames[staticItem.itemIndex] = CGRect(
+                        let displayHeight = max(0, inlineItem.size.height)
+                        inlineFrames[inlineItem.itemIndex] = CGRect(
                             x: frameRect.minX + lineOrigins[lineIndex].x + position.x,
                             y: viewportHeight - lineTop + (lineHeight - displayHeight) / 2,
-                            width: staticItem.size.width,
+                            width: inlineItem.size.width,
                             height: displayHeight
                         )
-                        itemHeights[staticItem.itemIndex] = itemHeight
+                        itemHeights[inlineItem.itemIndex] = itemHeight
                         continue
                     }
 
@@ -523,7 +519,7 @@ enum AnimationAtlasBuilder {
         }
         return TextSegment(
             glyphsByItem: glyphsByItem,
-            staticFrames: staticFrames,
+            inlineFrames: inlineFrames,
             itemHeights: itemHeights,
             lineFrames: lineFrames,
             height: textHeight
@@ -617,51 +613,6 @@ enum AnimationAtlasBuilder {
                 }
             }
         }
-        return Description(
-            key: key,
-            bounds: bounds,
-            delay: delay,
-            participatesInTimeline: true
-        )
-    }
-
-    private static func makeViewDescription(
-        view: UIView,
-        displayFrame: CGRect,
-        viewportSize: CGSize,
-        contentScale: CGFloat,
-        delay: Float,
-        rasters: inout [RasterKey: Raster]
-    ) throws -> Description {
-        guard displayFrame.width > 0, displayFrame.height > 0 else {
-            throw AnimationAtlasError.invalidViewFrame
-        }
-
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
-
-        let format = UIGraphicsImageRendererFormat.default()
-        format.scale = contentScale
-        format.opaque = false
-        let snapshot = UIGraphicsImageRenderer(size: displayFrame.size, format: format).image {
-            view.layer.render(in: $0.cgContext)
-        }
-        guard let image = snapshot.cgImage else {
-            throw AnimationAtlasError.cannotRasterizeView
-        }
-
-        let key = RasterKey.image(ObjectIdentifier(view), displayFrame.size)
-        if rasters[key] == nil {
-            rasters[key] = Raster(size: displayFrame.size) { context, rect in
-                context.draw(image, in: rect)
-            }
-        }
-        let bounds = CGRect(
-            x: displayFrame.minX,
-            y: viewportSize.height - displayFrame.maxY,
-            width: displayFrame.width,
-            height: displayFrame.height
-        )
         return Description(
             key: key,
             bounds: bounds,
