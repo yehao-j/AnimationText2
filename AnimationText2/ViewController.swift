@@ -215,7 +215,6 @@ private enum DemoText {
                     standaloneIndicator.startAnimating()
                 }
             }),
-
             .text("单"),
             .text("词"),
             .inlineView(inlineSpinner, completion: {
