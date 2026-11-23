@@ -21,7 +21,7 @@ final class ViewController: UIViewController {
         metalView.layer.borderColor = UIColor.green.cgColor
         view.addSubview(metalView)
 
-        metalView.heightBlock = {
+        metalView.onRenderedContentHeight = {
             print("-----", $0)
         }
         self.metalView = metalView

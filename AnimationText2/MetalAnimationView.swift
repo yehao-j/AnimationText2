@@ -92,7 +92,7 @@ public final class MetalAnimationView: UIView {
         didSet { metalView.onAnimationComplete = onAnimationComplete }
     }
     /// 每行首个 item 渲染前回调截至该行的累计高度，相同高度不重复回调。
-    public var heightBlock: ((CGFloat) -> Void)?
+    public var onRenderedContentHeight: ((CGFloat) -> Void)?
     public var onError: ((String) -> Void)? {
         didSet { metalView.onError = onError }
     }
@@ -119,10 +119,10 @@ public final class MetalAnimationView: UIView {
         ))
         clipsToBounds = true
         addSubview(metalView)
-        metalView.onHeightChange = { [weak self] height in
+        metalView.onRenderedContentHeight = { [weak self] height in
             guard let self else { return }
             self.frame.size.height = height
-            self.heightBlock?(height)
+            self.onRenderedContentHeight?(height)
         }
     }
 
@@ -148,7 +148,7 @@ public final class MetalAnimationView: UIView {
 private final class MetalContentView: MTKView, MTKViewDelegate {
     var onStats: ((PerformanceSnapshot) -> Void)?
     var onAnimationComplete: (() -> Void)?
-    var onHeightChange: ((CGFloat) -> Void)?
+    var onRenderedContentHeight: ((CGFloat) -> Void)?
     var onError: ((String) -> Void)?
     private(set) var initializationError: String?
 
@@ -216,7 +216,7 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
     private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
     private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
     private var renderedContentHeight: CGFloat = 0
-    private var lastHeightBlockValue: CGFloat?
+    private var lastReportedContentHeight: CGFloat?
 
     public override init(frame frameRect: CGRect, device: MTLDevice?) {
         let metalDevice = device ?? MTLCreateSystemDefaultDevice()
@@ -248,9 +248,9 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             renderer.onItemAnimationStart = { [weak self] height in
                 guard let self else { return }
                 self.renderedContentHeight = height
-                guard self.lastHeightBlockValue != height else { return }
-                self.lastHeightBlockValue = height
-                self.onHeightChange?(height)
+                guard self.lastReportedContentHeight != height else { return }
+                self.lastReportedContentHeight = height
+                self.onRenderedContentHeight?(height)
             }
             self.renderer = renderer
         } catch {
