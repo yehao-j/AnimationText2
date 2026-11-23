@@ -242,8 +242,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             renderer.onAnimationComplete = { [weak self] in
                 guard let self else { return }
                 self.isPaused = true
-//                self.frame.size.height = self.renderedContentHeight
-//                self.layoutItemsIfNeeded()
                 self.onAnimationComplete?()
                 print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
             }
