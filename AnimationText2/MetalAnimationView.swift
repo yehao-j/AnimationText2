@@ -126,6 +126,28 @@ public final class MetalAnimationView: UIView {
     public override var backgroundColor: UIColor? {
         didSet { metalViews.forEach { $0.backgroundColor = backgroundColor } }
     }
+    /// 文本颜色；修改后重新排版并从头播放。
+    public var textColor = UIColor(red: 0.09, green: 0.10, blue: 0.11, alpha: 1) {
+        didSet { invalidateContentLayout() }
+    }
+    /// 文本字体；修改后重新排版并从头播放。
+    public var font = UIFont.systemFont(ofSize: 17, weight: .regular) {
+        didSet { invalidateContentLayout() }
+    }
+    /// 普通文本行的行高，为当前字体行高向上取整，单位为点。
+    private var lineHeight: CGFloat { ceil(font.lineHeight) }
+    /// 字符间距，单位为点；修改后重新排版并从头播放。
+    public var letterSpacing: CGFloat = 0 {
+        didSet { invalidateContentLayout() }
+    }
+    /// 相邻文本行之间的额外间距，单位为点；修改后重新排版并从头播放。
+    public var lineSpacing: CGFloat = 0 {
+        didSet { invalidateContentLayout() }
+    }
+    /// 是否为每个文本行绘制随机背景色；颜色生成后保持不变，透明度为 0.5。修改后重新排版并从头播放。
+    public var showsRandomLineColors = true {
+        didSet { invalidateContentLayout() }
+    }
 
     public init(frame frameRect: CGRect, height: CGFloat, device: MTLDevice?) {
         // 排版宽度与单个 Metal 画布高度在创建时确定且不再变化，必须传入有效值。
@@ -177,10 +199,12 @@ public final class MetalAnimationView: UIView {
         do {
             let contentSegments = try renderer.layout(
                 items: items,
-                font: AnimationConfiguration.font,
-                lineHeight: AnimationConfiguration.lineHeight,
-                textColor: AnimationConfiguration.textColor,
-                lineSpacing: AnimationConfiguration.lineSpacing,
+                font: font,
+                lineHeight: lineHeight,
+                textColor: textColor,
+                letterSpacing: letterSpacing,
+                lineSpacing: lineSpacing,
+                showsRandomLineColors: showsRandomLineColors,
                 maxBlur: AnimationConfiguration.maxBlur,
                 contentRect: CGRect(x: 0, y: 0, width: bounds.width, height: contentHeight),
                 viewportSize: CGSize(width: bounds.width, height: contentHeight),
@@ -268,7 +292,7 @@ public final class MetalAnimationView: UIView {
                 preservingTimeline: preservingTimeline
             )
             metalView.isPaused = false
-            y += segment.visibleHeight + AnimationConfiguration.lineSpacing
+            y += segment.visibleHeight + lineSpacing
         }
     }
 

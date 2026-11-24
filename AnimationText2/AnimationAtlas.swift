@@ -4,33 +4,16 @@ import UIKit
 
 struct AnimationConfiguration {
     /// 单个动画单元的动画时长，单位为秒。
-//    static let duration: Float = 0.42
-    /// 相邻动画单元开始动画的时间间隔，单位为秒。
-//    static let stagger: Float = 0.08
-    
-//    static let duration: Float = 4
-//    static let stagger: Float = 4
-    static let stagger: Float = 0.08
     static let duration: Float = 0.42
+    /// 相邻动画单元开始动画的时间间隔，单位为秒。
+    static let stagger: Float = 0.08
     
     /// 动画开始前的延迟时间，单位为秒。
     static let startDelay: TimeInterval = 2
     /// 动画单元在开始时的垂直偏移距离，单位为点。
     static let travelDistance: Float = 10
-    /// 文本字体。
-    static let font = UIFont.systemFont(ofSize: 17, weight: .regular)
-    /// 普通文本行的行高，默认为当前字体行高向上取整，单位为点。
-    static let lineHeight = ceil(font.lineHeight)
-    /// 文本颜色。
-    static let textColor = UIColor(red: 0.09, green: 0.10, blue: 0.11, alpha: 1)
     /// 最大模糊半径（pt）。0 表示无模糊。
     static let maxBlur: Float = 8
-    /// 字符间距，单位为点。
-    static let letterSpacing: CGFloat = 0
-    /// 相邻文本行之间的额外间距，单位为点。
-    static let lineSpacing: CGFloat = 0
-    /// 是否为每个文本行绘制随机背景色；颜色生成后保持不变，透明度为 0.5。
-    static let showsRandomLineColors = true
 }
 
 struct AnimationInstance {
@@ -174,7 +157,9 @@ enum AnimationAtlasBuilder {
         font: UIFont,
         lineHeight: CGFloat,
         textColor: UIColor,
+        letterSpacing: CGFloat,
         lineSpacing: CGFloat,
+        showsRandomLineColors: Bool,
         maxBlur: Float,
         contentRect: CGRect,
         viewportSize: CGSize,
@@ -201,6 +186,7 @@ enum AnimationAtlasBuilder {
             font: font,
             lineHeight: lineHeight,
             textColor: textColor,
+            letterSpacing: letterSpacing,
             lineSpacing: lineSpacing,
             contentRect: contentRect
         )
@@ -217,6 +203,7 @@ enum AnimationAtlasBuilder {
             font: font,
             lineHeight: lineHeight,
             textColor: textColor,
+            letterSpacing: letterSpacing,
             lineSpacing: lineSpacing,
             contentRect: layoutContentRect,
             viewportSize: layoutViewportSize
@@ -300,7 +287,7 @@ enum AnimationAtlasBuilder {
             )
         }
 
-        if AnimationConfiguration.showsRandomLineColors {
+        if showsRandomLineColors {
             let backgrounds = textLayout.lineFrames.enumerated().map { lineIndex, frame in
                 let key = RasterKey.lineBackground(lineIndex)
                 let color: UIColor
@@ -356,6 +343,7 @@ enum AnimationAtlasBuilder {
         font: UIFont,
         lineHeight: CGFloat,
         textColor: UIColor,
+        letterSpacing: CGFloat,
         lineSpacing: CGFloat,
         contentRect: CGRect
     ) -> CGFloat {
@@ -378,6 +366,7 @@ enum AnimationAtlasBuilder {
                 range: segmentStart..<index,
                 font: font,
                 lineHeight: lineHeight,
+                letterSpacing: letterSpacing,
                 lineSpacing: lineSpacing,
                 textColor: textColor
             )
@@ -457,6 +446,7 @@ enum AnimationAtlasBuilder {
         font: UIFont,
         lineHeight: CGFloat,
         textColor: UIColor,
+        letterSpacing: CGFloat,
         lineSpacing: CGFloat,
         contentRect: CGRect,
         viewportSize: CGSize
@@ -503,6 +493,7 @@ enum AnimationAtlasBuilder {
                 font: font,
                 lineHeight: lineHeight,
                 textColor: textColor,
+                letterSpacing: letterSpacing,
                 lineSpacing: lineSpacing,
                 contentRect: contentRect,
                 viewportHeight: viewportSize.height,
@@ -532,6 +523,7 @@ enum AnimationAtlasBuilder {
         font: UIFont,
         lineHeight: CGFloat,
         textColor: UIColor,
+        letterSpacing: CGFloat,
         lineSpacing: CGFloat,
         contentRect: CGRect,
         viewportHeight: CGFloat,
@@ -542,6 +534,7 @@ enum AnimationAtlasBuilder {
             range: range,
             font: font,
             lineHeight: lineHeight,
+            letterSpacing: letterSpacing,
             lineSpacing: lineSpacing,
             textColor: textColor
         )
@@ -670,6 +663,7 @@ enum AnimationAtlasBuilder {
         range: Range<Int>,
         font: UIFont,
         lineHeight: CGFloat,
+        letterSpacing: CGFloat,
         lineSpacing: CGFloat,
         textColor: UIColor
     ) -> AttributedTextContent {
@@ -721,7 +715,7 @@ enum AnimationAtlasBuilder {
         paragraphStyle.lineBreakMode = .byCharWrapping
         attributedText.addAttributes([
             .font: font,
-            .kern: AnimationConfiguration.letterSpacing,
+            .kern: letterSpacing,
             .foregroundColor: textColor,
             .paragraphStyle: paragraphStyle
         ], range: NSRange(location: 0, length: attributedText.length))

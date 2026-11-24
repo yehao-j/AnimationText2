@@ -19,6 +19,7 @@ final class ViewController: UIViewController {
             device: nil
         )
         metalView.backgroundColor = .clear
+        metalView.textColor = .red
 //        metalView.layer.borderWidth = 1
 //        metalView.layer.borderColor = UIColor.green.cgColor
         view.addSubview(metalView)
