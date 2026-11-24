@@ -11,9 +11,15 @@ public enum MetalStandaloneViewAlignment {
 public enum MetalAnimationItem {
     case text(String)
     /// 作为行内元素紧跟前一个元素排版，直接读取 view.bounds.size，并在当前行内垂直居中；
+    /// spacing 为 view 两侧各留出的间距。view 是首个 item 时不加左侧间距；右侧间距用行尾空格
+    /// 实现，view 排到行尾时间距悬挂不显示，也不会把 view 挤到下一行。
     /// 保留原生 UIKit 内部动画（如指示器旋转）；入场动画与 standaloneView 同款由 UIKit 按时间轴播放，
     /// 播完回调 completion（流式追加不重播旧内容，不会重复回调）。
-    case inlineView(UIView, completion: (() -> Void)? = nil)
+    case inlineView(
+        UIView,
+        spacing: CGFloat = 0,
+        completion: (() -> Void)? = nil
+    )
     /// 原生 View 独占一行并按 alignment 对齐；直接读取 view.bounds.size，宽度夹紧到 MetalAnimationView 宽度。
     case standaloneView(
         UIView,

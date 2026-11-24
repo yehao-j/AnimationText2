@@ -237,7 +237,7 @@ enum AnimationAtlasBuilder {
                     delay: delay(for: descriptions.count + standaloneViewLayouts.count),
                     rasters: &rasters
                 )
-            case .inlineView(let view, let completion):
+            case .inlineView(let view, _, let completion):
                 description = nil
                 guard let frame = textLayout.inlineFrames[itemIndex] else { break }
                 let inlineLayout = StandaloneViewLayout(
@@ -669,6 +669,16 @@ enum AnimationAtlasBuilder {
         var textItems: [TextItem] = []
         var inlineItems: [Int: InlineItem] = [:]
 
+        // 间距实现为定宽空格：右间距在行尾被 CoreText 悬挂处理，不计行宽，
+        // 因此不会把 inline view 挤到下一行；间距空格不注册 TextItem，光栅化时自动跳过。
+        func appendSpacing(width: CGFloat) {
+            let delegate = makeInlineViewDelegate(width: width)
+            attributedText.append(NSAttributedString(
+                string: " ",
+                attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
+            ))
+        }
+
         for itemIndex in range {
             switch items[itemIndex] {
             case .text(let text):
@@ -677,14 +687,20 @@ enum AnimationAtlasBuilder {
                     range: NSRange(location: attributedText.length, length: text.utf16.count)
                 ))
                 attributedText.append(NSAttributedString(string: text))
-            case .inlineView(let view, _):
+            case .inlineView(let view, let spacing, _):
                 let size = view.bounds.size
+                if spacing > 0, itemIndex != items.startIndex {
+                    appendSpacing(width: spacing)
+                }
                 inlineItems[attributedText.length] = InlineItem(itemIndex: itemIndex, size: size)
                 let delegate = makeInlineViewDelegate(width: max(0, size.width))
                 attributedText.append(NSAttributedString(
                     string: "\u{FFFC}",
                     attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
                 ))
+                if spacing > 0 {
+                    appendSpacing(width: spacing)
+                }
             case .standaloneView, .end:
                 continue
             }

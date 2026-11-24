@@ -29,6 +29,7 @@ final class ViewController: UIViewController {
         self.metalView = metalView
         streamingBatches = DemoText.streamingBatches(
             inlineViews: [
+                makeBadge(title: "UI1", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
                 makeBadge(title: "UI", color: UIColor(red: 0.16, green: 0.48, blue: 0.78, alpha: 1)),
                 makeBadge(title: "GPU", color: UIColor(red: 0.84, green: 0.38, blue: 0.16, alpha: 1)),
                 makeBadge(title: "VIEW", color: UIColor(red: 0.32, green: 0.58, blue: 0.32, alpha: 1))
@@ -205,13 +206,16 @@ private enum DemoText {
         standaloneIndicator: UIActivityIndicatorView
     ) -> [[MetalAnimationItem]] {
         let prefix: [MetalAnimationItem] = [
+            .inlineView(inlineViews[0], spacing: 10),
             .text("汉"),
             .text("字"),
-            .inlineView(inlineViews[0]),
             .text("与"),
+            .text("1"),
+            .text("1"),
             .text(" Metal "),
             .text("一起"),
             .text(" Animation"),
+            .inlineView(inlineViews[1], spacing: 9),
             .standaloneView(standaloneView, alignment: .left, completion: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     standaloneIndicator.startAnimating()
@@ -224,7 +228,7 @@ private enum DemoText {
                     inlineIndicator.startAnimating()
                 }
             }),
-            .inlineView(inlineViews[1]),
+            .inlineView(inlineViews[2]),
             .text("夹在"),
             .text(" Chinese "),
             .text("和"),
@@ -234,7 +238,7 @@ private enum DemoText {
 
             .text("静"),
             .text("态"),
-            .inlineView(inlineViews[2]),
+            .inlineView(inlineViews[3]),
             .text("也能"),
             .text("和"),
             .text(" Text "),
