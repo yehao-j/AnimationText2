@@ -8,6 +8,7 @@ struct AnimationUniforms {
     var duration: Float
     var travelDistance: Float
     var maxBlurInPixels: Float
+    var renderOffsetY: Float
     var viewportSize: SIMD2<Float>
     var atlasTexelSize: SIMD2<Float>
 }
@@ -82,7 +83,7 @@ final class AnimationRenderer: NSObject {
         viewportSize: CGSize,
         contentScale: CGFloat,
         preservingTimeline: Bool
-    ) throws -> [StandaloneViewLayout] {
+    ) throws -> [AnimationContentSegment] {
         // 流式追加：保留 startTime 与旧实例的 delay，旧内容保持最终态不重播，
         // 新实例从当前已播时间（或队尾）接续。
         let elapsed = preservingTimeline ? Float(max(0, CACurrentMediaTime() - startTime)) : 0
@@ -110,7 +111,7 @@ final class AnimationRenderer: NSObject {
         self.viewportSize = viewportSize
         completionReported = false
         if !preservingTimeline { replay() }
-        return atlas.standaloneViewLayouts
+        return atlas.contentSegments
     }
 
     func replay() {
@@ -118,20 +119,23 @@ final class AnimationRenderer: NSObject {
         nextItemHeightIndex = 0
     }
 
-    func draw(in view: MTKView) {
-        guard let atlas else { return }
+    func draw(in view: MTKView, segmentIndex: Int, reportsEvents: Bool) {
+        guard let atlas, atlas.contentSegments.indices.contains(segmentIndex) else { return }
+        let contentSegment = atlas.contentSegments[segmentIndex]
         let now = CACurrentMediaTime()
         let rawElapsed = Float(max(0, now - startTime))
-        while nextItemHeightIndex < atlas.itemHeights.count {
-            let itemHeight = atlas.itemHeights[nextItemHeightIndex]
-            guard itemHeight.delay <= rawElapsed else { break }
-            nextItemHeightIndex += 1
-            onItemAnimationStart?(itemHeight.height)
+        if reportsEvents {
+            while nextItemHeightIndex < atlas.itemHeights.count {
+                let itemHeight = atlas.itemHeights[nextItemHeightIndex]
+                guard itemHeight.delay <= rawElapsed else { break }
+                nextItemHeightIndex += 1
+                onItemAnimationStart?(itemHeight.height)
+            }
         }
         let animationFinished = atlas.hasEnd && rawElapsed >= atlas.animationDuration
 
         if atlas.instances.isEmpty {
-            if animationFinished, !completionReported {
+            if reportsEvents, animationFinished, !completionReported {
                 completionReported = true
                 onAnimationComplete?()
             }
@@ -165,6 +169,7 @@ final class AnimationRenderer: NSObject {
             duration: AnimationConfiguration.duration,
             travelDistance: AnimationConfiguration.travelDistance,
             maxBlurInPixels: atlas.maxBlur * atlas.pixelsPerPoint,
+            renderOffsetY: Float(contentSegment.renderOffsetY),
             viewportSize: SIMD2(Float(viewportSize.width), Float(viewportSize.height)),
             atlasTexelSize: SIMD2(
                 1 / Float(atlas.texture.width),
@@ -199,6 +204,16 @@ final class AnimationRenderer: NSObject {
             return
         }
         verticalEncoder.setRenderPipelineState(verticalPipelineState)
+        let scaleY = view.drawableSize.height / view.bounds.height
+        verticalEncoder.setScissorRect(MTLScissorRect(
+            x: 0,
+            y: 0,
+            width: Int(view.drawableSize.width),
+            height: min(
+                Int(view.drawableSize.height),
+                max(0, Int(ceil(contentSegment.visibleHeight * scaleY)))
+            )
+        ))
         verticalEncoder.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
         verticalEncoder.setVertexBytes(
             &uniforms,
@@ -217,13 +232,15 @@ final class AnimationRenderer: NSObject {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        let itemCount = atlas.instances.count + atlas.standaloneViewLayouts.count
-        if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
-            onStats?(snapshot)
-        }
-        if animationFinished, !completionReported {
-            completionReported = true
-            onAnimationComplete?()
+        if reportsEvents {
+            let itemCount = atlas.instances.count + atlas.standaloneViewLayouts.count
+            if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
+                onStats?(snapshot)
+            }
+            if animationFinished, !completionReported {
+                completionReported = true
+                onAnimationComplete?()
+            }
         }
     }
 

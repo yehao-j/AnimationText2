@@ -82,76 +82,31 @@ private extension Unicode.Scalar {
 }
 
 public final class MetalAnimationView: UIView {
-    private let metalView: MetalContentView
+    private var metalViews: [MetalContentView] = []
+    private let contentHeight: CGFloat
+    private let device: MTLDevice?
+    private var renderer: AnimationRenderer?
+    private var storedItems: [MetalAnimationItem] = []
+    private var lastContentScale: CGFloat = 0
+    private var timelineStartTime = CACurrentMediaTime()
+    private var renderedContentHeight: CGFloat = 0
+    private var lastReportedContentHeight: CGFloat?
 
-    public var onStats: ((PerformanceSnapshot) -> Void)? {
-        didSet { metalView.onStats = onStats }
+    private enum PendingLayout {
+        case append
+        case rebuild
     }
+    private var pendingLayout: PendingLayout?
+    private var appendLayoutScheduled = false
+
+    public var onStats: ((PerformanceSnapshot) -> Void)?
     /// 收到 end 且所有 item 动画完成后回调，此时视图高度已调整为内容高度。
-    public var onAnimationComplete: (() -> Void)? {
-        didSet { metalView.onAnimationComplete = onAnimationComplete }
-    }
+    public var onAnimationComplete: (() -> Void)?
     /// 每行首个 item 渲染前回调截至该行的累计高度，相同高度不重复回调。
     public var onRenderedContentHeight: ((CGFloat) -> Void)?
-    public var onError: ((String) -> Void)? {
-        didSet { metalView.onError = onError }
-    }
-    public var initializationError: String? { metalView.initializationError }
+    public var onError: ((String) -> Void)?
+    public private(set) var initializationError: String?
 
-    /// 整段设置会重置内容并从头播放；流式追加请用 `append(items:)`。
-    public var items: [MetalAnimationItem] {
-        get { metalView.items }
-        set { metalView.items = newValue }
-    }
-    public override var backgroundColor: UIColor? {
-        didSet { metalView.backgroundColor = backgroundColor }
-    }
-
-    public init(frame frameRect: CGRect, height: CGFloat, device: MTLDevice?) {
-        // 排版宽度与 Metal 画布高度在创建时确定且不再变化，必须传入有效值。
-        precondition(frameRect.width > 0, "MetalAnimationView 需要有效的 frame，width 不能为 0")
-        precondition(height > 0, "MetalAnimationView 需要有效的 height，height 不能为 0")
-        metalView = MetalContentView(
-            frame: CGRect(origin: .zero, size: CGSize(width: frameRect.width, height: height)),
-            device: device
-        )
-        super.init(frame: frameRect)
-        clipsToBounds = true
-        addSubview(metalView)
-        metalView.onRenderedContentHeight = { [weak self] height in
-            guard let self else { return }
-            self.frame.size.height = height
-            self.onRenderedContentHeight?(height)
-        }
-    }
-
-    public required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
-    /// 时间轴；同一 runloop 内的多次追加合并为一次排版重建。需在主线程调用。
-    public func append(items newItems: [MetalAnimationItem]) {
-        metalView.append(items: newItems)
-    }
-
-    public func layoutItemsIfNeeded() {
-        metalView.layoutItemsIfNeeded()
-    }
-
-    public func replay() {
-        metalView.replay()
-    }
-}
-
-private final class MetalContentView: MTKView, MTKViewDelegate {
-    var onStats: ((PerformanceSnapshot) -> Void)?
-    var onAnimationComplete: (() -> Void)?
-    var onRenderedContentHeight: ((CGFloat) -> Void)?
-    var onError: ((String) -> Void)?
-    private(set) var initializationError: String?
-
-    private var storedItems: [MetalAnimationItem] = []
     /// 整段设置会重置内容并从头播放；流式追加请用 `append(items:)`。
     public var items: [MetalAnimationItem] {
         get { storedItems }
@@ -160,17 +115,35 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             invalidateContentLayout()
         }
     }
-    /// 待处理的排版类型；nil 表示无需排版。
-    private enum PendingLayout {
-        /// 流式追加：保留时间轴增量重排，旧实例沿用原 delay 不重播。
-        case append
-        /// 整段设置 / replay：全量重建并从头播放。
-        case rebuild
+    public override var backgroundColor: UIColor? {
+        didSet { metalViews.forEach { $0.backgroundColor = backgroundColor } }
     }
-    /// append 置 .append，invalidateContentLayout 置 .rebuild，排版成功后清除。
-    private var pendingLayout: PendingLayout?
-    /// append 置位：合并同一 runloop 内的多次追加，只调度一次异步排版；异步任务执行前清除。
-    private var appendLayoutScheduled = false
+
+    public init(frame frameRect: CGRect, height: CGFloat, device: MTLDevice?) {
+        // 排版宽度与单个 Metal 画布高度在创建时确定且不再变化，必须传入有效值。
+        precondition(frameRect.width > 0, "MetalAnimationView 需要有效的 frame，width 不能为 0")
+        precondition(height > 0, "MetalAnimationView 需要有效的 height，height 不能为 0")
+        contentHeight = height
+        let metalDevice = device ?? MTLCreateSystemDefaultDevice()
+        self.device = metalDevice
+        if let metalDevice {
+            do {
+                renderer = try AnimationRenderer(device: metalDevice, pixelFormat: .bgra8Unorm)
+            } catch {
+                initializationError = error.localizedDescription
+            }
+        } else {
+            initializationError = "这台设备不支持 Metal"
+        }
+        super.init(frame: frameRect)
+        clipsToBounds = true
+        configureRenderer()
+        appendMetalView()
+    }
+
+    public required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     /// 流式追加 item（文本拆分由外部完成）。已显示的内容不重播，新 item 接续当前动画
     /// 时间轴；同一 runloop 内的多次追加合并为一次排版重建。需在主线程调用。
@@ -186,6 +159,146 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
             self.layoutItemsIfNeeded()
         }
     }
+
+    public func layoutItemsIfNeeded() {
+        guard let renderer, !items.isEmpty, bounds.width > 0, contentHeight > 0 else { return }
+        let contentScale = metalViews[0].contentScaleFactor
+        guard pendingLayout != nil || contentScale != lastContentScale else { return }
+        let preservingTimeline = pendingLayout == .append
+
+        do {
+            let contentSegments = try renderer.layout(
+                items: items,
+                font: AnimationConfiguration.font,
+                lineHeight: AnimationConfiguration.lineHeight,
+                textColor: AnimationConfiguration.textColor,
+                lineSpacing: AnimationConfiguration.lineSpacing,
+                maxBlur: AnimationConfiguration.maxBlur,
+                contentRect: CGRect(x: 0, y: 0, width: bounds.width, height: contentHeight),
+                viewportSize: CGSize(width: bounds.width, height: contentHeight),
+                contentScale: contentScale,
+                preservingTimeline: preservingTimeline
+            )
+            timelineStartTime = renderer.timelineStartTime
+            updateMetalViews(with: contentSegments, preservingTimeline: preservingTimeline)
+            lastContentScale = contentScale
+            pendingLayout = nil
+        } catch {
+            onError?(error.localizedDescription)
+        }
+    }
+
+    public func replay() {
+        invalidateContentLayout()
+    }
+
+    private func configureRenderer() {
+        renderer?.onStats = { [weak self] snapshot in
+            self?.onStats?(snapshot)
+        }
+        renderer?.onAnimationComplete = { [weak self] in
+            guard let self else { return }
+            self.metalViews.forEach { $0.isPaused = true }
+            self.onAnimationComplete?()
+            print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
+        }
+        renderer?.onItemAnimationStart = { [weak self] height in
+            guard let self else { return }
+            self.renderedContentHeight = height
+            guard self.lastReportedContentHeight != height else { return }
+            self.lastReportedContentHeight = height
+            self.frame.size.height = height
+            self.onRenderedContentHeight?(height)
+        }
+    }
+
+    @discardableResult
+    private func appendMetalView() -> MetalContentView {
+        let index = metalViews.count
+        let y = metalViews.last.map { $0.frame.maxY + AnimationConfiguration.lineSpacing } ?? 0
+        let metalView = MetalContentView(
+            frame: CGRect(x: 0, y: y, width: bounds.width, height: contentHeight),
+            device: device,
+            renderer: renderer,
+            segmentIndex: index
+        )
+        metalView.layer.borderColor = UIColor.red.cgColor
+        metalView.layer.borderWidth = 1
+        metalView.backgroundColor = backgroundColor
+        metalView.onNeedsLayout = { [weak self] in
+            self?.layoutItemsIfNeeded()
+        }
+        metalViews.append(metalView)
+        addSubview(metalView)
+        return metalView
+    }
+
+    private func updateMetalViews(
+        with contentSegments: [AnimationContentSegment],
+        preservingTimeline: Bool
+    ) {
+        while metalViews.count < contentSegments.count {
+            appendMetalView()
+        }
+        while metalViews.count > contentSegments.count {
+            metalViews.removeLast().removeFromSuperview()
+        }
+        for (index, segment) in contentSegments.enumerated() {
+            metalViews[index].applyStandaloneViewLayouts(
+                segment.standaloneViewLayouts,
+                timelineStartTime: timelineStartTime,
+                preservingTimeline: preservingTimeline
+            )
+            metalViews[index].isPaused = false
+        }
+    }
+
+    private func invalidateContentLayout() {
+        pendingLayout = .rebuild
+        renderedContentHeight = 0
+        layoutItemsIfNeeded()
+    }
+}
+
+private final class MetalContentView: MTKView, MTKViewDelegate {
+    var onNeedsLayout: (() -> Void)?
+    private let renderer: AnimationRenderer?
+    private let segmentIndex: Int
+    private var standaloneViewLayouts: [StandaloneViewLayout] = []
+    private var timelineStartTime = CACurrentMediaTime()
+    private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
+    private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
+    private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
+    private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
+
+    init(
+        frame frameRect: CGRect,
+        device: MTLDevice?,
+        renderer: AnimationRenderer?,
+        segmentIndex: Int
+    ) {
+        self.renderer = renderer
+        self.segmentIndex = segmentIndex
+        super.init(frame: frameRect, device: device)
+        colorPixelFormat = .bgra8Unorm
+        clipsToBounds = true
+        clearColor = MTLClearColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
+        framebufferOnly = true
+        enableSetNeedsDisplay = false
+        isPaused = false
+        preferredFramesPerSecond = 60
+        delegate = self
+    }
+
+    public required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        standaloneStartWorkItems.values.forEach { $0.cancel() }
+        standaloneAnimators.values.forEach { $0.stopAnimation(true) }
+    }
+
     public override var backgroundColor: UIColor? {
         didSet {
             guard let backgroundColor else {
@@ -206,102 +319,14 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
         }
     }
 
-    private var renderer: AnimationRenderer?
-    private var lastContentScale: CGFloat = 0
-    private var standaloneViewLayouts: [StandaloneViewLayout] = []
-    private var timelineStartTime = CACurrentMediaTime()
-    private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
-    private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
-    private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
-    private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
-    private var renderedContentHeight: CGFloat = 0
-    private var lastReportedContentHeight: CGFloat?
-
-    public override init(frame frameRect: CGRect, device: MTLDevice?) {
-        let metalDevice = device ?? MTLCreateSystemDefaultDevice()
-        super.init(frame: frameRect, device: metalDevice)
-        guard let metalDevice else {
-            initializationError = "这台设备不支持 Metal"
-            return
-        }
-        colorPixelFormat = .bgra8Unorm
-        clipsToBounds = true
-        clearColor = MTLClearColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
-        framebufferOnly = true
-        enableSetNeedsDisplay = false
-        isPaused = false
-        preferredFramesPerSecond = 60
-        delegate = self
-
-        do {
-            let renderer = try AnimationRenderer(device: metalDevice, pixelFormat: colorPixelFormat)
-            renderer.onStats = { [weak self] snapshot in
-                self?.onStats?(snapshot)
-            }
-            renderer.onAnimationComplete = { [weak self] in
-                guard let self else { return }
-                self.isPaused = true
-                self.onAnimationComplete?()
-                print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
-            }
-            renderer.onItemAnimationStart = { [weak self] height in
-                guard let self else { return }
-                self.renderedContentHeight = height
-                guard self.lastReportedContentHeight != height else { return }
-                self.lastReportedContentHeight = height
-                self.onRenderedContentHeight?(height)
-            }
-            self.renderer = renderer
-        } catch {
-            initializationError = error.localizedDescription
-        }
-    }
-
-    public required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    /// 按需对当前 items 执行排版。调用入口：流式追加合并后的异步排版、首次进入窗口、
-    /// invalidateContentLayout 触发的重排。
-    ///
-    /// bounds 在创建时固定不变，因此只有两种情况需要排版：
-    /// - 流式追加（pendingLayout == .append）：全量重建图集但保留时间轴，旧实例沿用原
-    ///   delay 不重播，新实例接续当前时间轴。
-    /// - contentScaleFactor 变化（如视图进入窗口时从 1.0 变为实际屏幕 scale），或
-    ///   items 整段设置 / replay 经 invalidateContentLayout 置 pendingLayout = .rebuild
-    ///   强制重排：全量重建并从头播放。
-    /// 排版失败通过 onError 上报，成功后恢复渲染。
-    public func layoutItemsIfNeeded() {
-        guard let renderer, !items.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
-        guard pendingLayout != nil || contentScaleFactor != lastContentScale else { return }
-        let preservingTimeline = pendingLayout == .append
-
-        // 全量重建图集：追加时保留时间轴避免旧内容重播，整段设置时从头播放。
-        do {
-            standaloneViewLayouts = try renderer.layout(
-                items: items,
-                font: AnimationConfiguration.font,
-                lineHeight: AnimationConfiguration.lineHeight,
-                textColor: AnimationConfiguration.textColor,
-                lineSpacing: AnimationConfiguration.lineSpacing,
-                maxBlur: AnimationConfiguration.maxBlur,
-                contentRect: bounds,
-                viewportSize: bounds.size,
-                contentScale: contentScaleFactor,
-                preservingTimeline: preservingTimeline
-            )
-            timelineStartTime = renderer.timelineStartTime
-            layoutStandaloneViews(preservingTimeline: preservingTimeline)
-            lastContentScale = contentScaleFactor
-            pendingLayout = nil
-            isPaused = false
-        } catch {
-            onError?(error.localizedDescription)
-        }
-    }
-
-    public func replay() {
-        invalidateContentLayout()
+    func applyStandaloneViewLayouts(
+        _ layouts: [StandaloneViewLayout],
+        timelineStartTime: CFTimeInterval,
+        preservingTimeline: Bool
+    ) {
+        standaloneViewLayouts = layouts
+        self.timelineStartTime = timelineStartTime
+        layoutStandaloneViews(preservingTimeline: preservingTimeline)
     }
 
     private func layoutStandaloneViews(preservingTimeline: Bool) {
@@ -401,20 +426,14 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
         }
     }
 
-    private func invalidateContentLayout() {
-        pendingLayout = .rebuild
-        renderedContentHeight = 0
-        layoutItemsIfNeeded()
-    }
-
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        layoutItemsIfNeeded()
+        onNeedsLayout?()
         if isPaused {
             draw(in: view)
         }
     }
 
     public func draw(in view: MTKView) {
-        renderer?.draw(in: view)
+        renderer?.draw(in: view, segmentIndex: segmentIndex, reportsEvents: segmentIndex == 0)
     }
 }

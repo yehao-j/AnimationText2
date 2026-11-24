@@ -17,6 +17,7 @@ struct AnimationUniforms {
     float duration;
     float travelDistance;
     float maxBlurInPixels;
+    float renderOffsetY;
     float2 viewportSize;
     float2 atlasTexelSize;
 };
@@ -52,6 +53,7 @@ VertexOut animatedInstanceVertex(
 
     const float easedProgress = 1.0 - pow(1.0 - progress, 3.0);
     float2 position = instance.origin + corner * instance.size;
+    position.y += uniforms.renderOffsetY;
     position.y -= (1.0 - easedProgress) * uniforms.travelDistance;
     out.position = float4(position / uniforms.viewportSize * 2.0 - 1.0, 0, 1);
     return out;

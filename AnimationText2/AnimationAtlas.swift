@@ -4,12 +4,14 @@ import UIKit
 
 struct AnimationConfiguration {
     /// 单个动画单元的动画时长，单位为秒。
-    static let duration: Float = 0.42
+//    static let duration: Float = 0.42
     /// 相邻动画单元开始动画的时间间隔，单位为秒。
-    static let stagger: Float = 0.08
+//    static let stagger: Float = 0.08
     
-//    static let duration: Float = 1
-//    static let stagger: Float = 0.2
+//    static let duration: Float = 4
+//    static let stagger: Float = 4
+    static let stagger: Float = 0.08
+    static let duration: Float = 0.42
     
     /// 动画开始前的延迟时间，单位为秒。
     static let startDelay: TimeInterval = 2
@@ -54,11 +56,20 @@ struct AnimationItemHeight {
     let height: CGFloat
 }
 
+struct AnimationContentSegment {
+    let contentOffsetY: CGFloat
+    let renderOffsetY: CGFloat
+    let displayOffsetY: CGFloat
+    let visibleHeight: CGFloat
+    let standaloneViewLayouts: [StandaloneViewLayout]
+}
+
 struct AnimationAtlas {
     let texture: MTLTexture
     let instances: [AnimationInstance]
     let standaloneViewLayouts: [StandaloneViewLayout]
     let itemHeights: [AnimationItemHeight]
+    let contentSegments: [AnimationContentSegment]
     /// 按动画实例生成顺序排列的 delay；流式追加重建时旧实例沿用这些时刻，保证不重播。
     let sequenceDelays: [Float]
     let blurAtlasSize: CGSize
@@ -104,6 +115,12 @@ enum AnimationAtlasBuilder {
         let itemHeights: [Int: CGFloat]
         let lineFrames: [CGRect]
         let height: CGFloat
+    }
+
+    private struct AttributedTextContent {
+        let attributedText: NSMutableAttributedString
+        let textItems: [TextItem]
+        let inlineItems: [Int: InlineItem]
     }
 
     private struct InlineItem {
@@ -177,14 +194,30 @@ enum AnimationAtlasBuilder {
             if sequence < existingDelays.count { return existingDelays[sequence] }
             return firstNewDelay + Float(sequence - existingDelays.count) * AnimationConfiguration.stagger
         }
+        let measuredContentHeight = measureContentHeight(
+            items: items,
+            font: font,
+            lineHeight: lineHeight,
+            textColor: textColor,
+            lineSpacing: lineSpacing,
+            contentRect: contentRect
+        )
+        let layoutHeight = max(viewportSize.height, measuredContentHeight)
+        let layoutContentRect = CGRect(
+            x: contentRect.minX,
+            y: contentRect.minY,
+            width: contentRect.width,
+            height: layoutHeight
+        )
+        let layoutViewportSize = CGSize(width: viewportSize.width, height: layoutHeight)
         let textLayout = layoutText(
             items: items,
             font: font,
             lineHeight: lineHeight,
             textColor: textColor,
             lineSpacing: lineSpacing,
-            contentRect: contentRect,
-            viewportSize: viewportSize
+            contentRect: layoutContentRect,
+            viewportSize: layoutViewportSize
         )
         let glyphsByItem = textLayout.glyphsByItem
 
@@ -243,6 +276,23 @@ enum AnimationAtlasBuilder {
             }
         }
 
+        let contentSegments = makeContentSegments(
+            textLayout: textLayout,
+            standaloneViewLayouts: standaloneViewLayouts,
+            layoutHeight: layoutHeight,
+            segmentHeight: viewportSize.height,
+            lineSpacing: lineSpacing
+        )
+        itemHeights = itemHeights.map { itemHeight in
+            let segmentIndex = contentSegments.lastIndex {
+                itemHeight.height > $0.contentOffsetY
+            } ?? 0
+            return AnimationItemHeight(
+                delay: itemHeight.delay,
+                height: itemHeight.height + contentSegments[segmentIndex].displayOffsetY
+            )
+        }
+
         if AnimationConfiguration.showsRandomLineColors {
             let backgrounds = textLayout.lineFrames.enumerated().map { lineIndex, frame in
                 let key = RasterKey.lineBackground(lineIndex)
@@ -266,7 +316,7 @@ enum AnimationAtlasBuilder {
                     key: key,
                     bounds: CGRect(
                         x: frame.minX,
-                        y: viewportSize.height - frame.maxY,
+                        y: layoutViewportSize.height - frame.maxY,
                         width: frame.width,
                         height: frame.height
                     ),
@@ -281,6 +331,7 @@ enum AnimationAtlasBuilder {
             descriptions: descriptions,
             standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
+            contentSegments: contentSegments,
             rasters: rasters,
             hasEnd: items.contains { item in
                 if case .end = item { return true }
@@ -290,6 +341,107 @@ enum AnimationAtlasBuilder {
             contentScale: scale,
             device: device
         )
+    }
+
+    private static func measureContentHeight(
+        items: [MetalAnimationItem],
+        font: UIFont,
+        lineHeight: CGFloat,
+        textColor: UIColor,
+        lineSpacing: CGFloat,
+        contentRect: CGRect
+    ) -> CGFloat {
+        var height: CGFloat = 0
+        var index = 0
+        while index < items.count {
+            if case .standaloneView(let view, _, _) = items[index] {
+                height += max(0, view.bounds.height) + lineSpacing
+                index += 1
+                continue
+            }
+
+            let segmentStart = index
+            while index < items.count {
+                if case .standaloneView = items[index] { break }
+                index += 1
+            }
+            let content = makeAttributedText(
+                items: items,
+                range: segmentStart..<index,
+                font: font,
+                lineHeight: lineHeight,
+                lineSpacing: lineSpacing,
+                textColor: textColor
+            )
+            guard content.attributedText.length > 0 else { continue }
+            let framesetter = CTFramesetterCreateWithAttributedString(content.attributedText)
+            let suggestedSize = CTFramesetterSuggestFrameSizeWithConstraints(
+                framesetter,
+                CFRange(location: 0, length: content.attributedText.length),
+                nil,
+                CGSize(width: contentRect.width, height: CGFloat.greatestFiniteMagnitude),
+                nil
+            )
+            let textHeight = ceil(suggestedSize.height)
+            height += textHeight
+            if textHeight > 0 {
+                height += lineSpacing
+            }
+        }
+        return height
+    }
+
+    private static func makeContentSegments(
+        textLayout: TextLayout,
+        standaloneViewLayouts: [StandaloneViewLayout],
+        layoutHeight: CGFloat,
+        segmentHeight: CGFloat,
+        lineSpacing: CGFloat
+    ) -> [AnimationContentSegment] {
+        let rowFrames = (textLayout.lineFrames + Array(textLayout.standaloneFrames.values)).sorted {
+            $0.minY < $1.minY
+        }
+        var contentOffsets: [CGFloat] = [0]
+        var currentOffset: CGFloat = 0
+        var currentSegmentHasRows = false
+        for frame in rowFrames {
+            if currentSegmentHasRows && frame.maxY - currentOffset > segmentHeight {
+                currentOffset = frame.minY
+                contentOffsets.append(currentOffset)
+                currentSegmentHasRows = false
+            }
+            currentSegmentHasRows = true
+        }
+
+        var layoutsBySegment = Array(
+            repeating: [StandaloneViewLayout](),
+            count: contentOffsets.count
+        )
+        for layout in standaloneViewLayouts {
+            let segmentIndex = contentOffsets.lastIndex {
+                layout.frame.midY >= $0
+            } ?? 0
+            let localFrame = layout.frame.offsetBy(dx: 0, dy: -contentOffsets[segmentIndex])
+            layoutsBySegment[segmentIndex].append(StandaloneViewLayout(
+                view: layout.view,
+                frame: localFrame,
+                delay: layout.delay,
+                completion: layout.completion
+            ))
+        }
+
+        return contentOffsets.enumerated().map { index, contentOffset in
+            let visibleHeight = index + 1 < contentOffsets.count
+                ? contentOffsets[index + 1] - contentOffset
+                : segmentHeight
+            return AnimationContentSegment(
+                contentOffsetY: contentOffset,
+                renderOffsetY: contentOffset + segmentHeight - layoutHeight,
+                displayOffsetY: CGFloat(index) * (segmentHeight + lineSpacing) - contentOffset,
+                visibleHeight: visibleHeight,
+                standaloneViewLayouts: layoutsBySegment[index]
+            )
+        }
     }
 
     private static func layoutText(
@@ -377,30 +529,17 @@ enum AnimationAtlasBuilder {
         viewportHeight: CGFloat,
         top: CGFloat
     ) -> TextSegment {
-        let attributedText = NSMutableAttributedString()
-        var textItems: [TextItem] = []
-        var inlineItems: [Int: InlineItem] = [:]
-
-        for itemIndex in range {
-            switch items[itemIndex] {
-            case .text(let text):
-                textItems.append(TextItem(
-                    itemIndex: itemIndex,
-                    range: NSRange(location: attributedText.length, length: text.utf16.count)
-                ))
-                attributedText.append(NSAttributedString(string: text))
-            case .inlineView(let view, _):
-                let size = view.bounds.size
-                inlineItems[attributedText.length] = InlineItem(itemIndex: itemIndex, size: size)
-                let delegate = makeInlineViewDelegate(width: max(0, size.width))
-                attributedText.append(NSAttributedString(
-                    string: "\u{FFFC}",
-                    attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
-                ))
-            case .standaloneView, .end:
-                continue
-            }
-        }
+        let content = makeAttributedText(
+            items: items,
+            range: range,
+            font: font,
+            lineHeight: lineHeight,
+            lineSpacing: lineSpacing,
+            textColor: textColor
+        )
+        let attributedText = content.attributedText
+        let textItems = content.textItems
+        let inlineItems = content.inlineItems
 
         guard attributedText.length > 0 else {
             return TextSegment(
@@ -411,18 +550,6 @@ enum AnimationAtlasBuilder {
                 height: 0
             )
         }
-
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.minimumLineHeight = lineHeight
-        paragraphStyle.maximumLineHeight = lineHeight
-        paragraphStyle.lineSpacing = lineSpacing
-        paragraphStyle.lineBreakMode = .byCharWrapping
-        attributedText.addAttributes([
-            .font: font,
-            .kern: AnimationConfiguration.letterSpacing,
-            .foregroundColor: textColor,
-            .paragraphStyle: paragraphStyle
-        ], range: NSRange(location: 0, length: attributedText.length))
 
         let framesetter = CTFramesetterCreateWithAttributedString(attributedText)
         let suggestedSize = CTFramesetterSuggestFrameSizeWithConstraints(
@@ -530,6 +657,57 @@ enum AnimationAtlasBuilder {
         )
     }
 
+    private static func makeAttributedText(
+        items: [MetalAnimationItem],
+        range: Range<Int>,
+        font: UIFont,
+        lineHeight: CGFloat,
+        lineSpacing: CGFloat,
+        textColor: UIColor
+    ) -> AttributedTextContent {
+        let attributedText = NSMutableAttributedString()
+        var textItems: [TextItem] = []
+        var inlineItems: [Int: InlineItem] = [:]
+
+        for itemIndex in range {
+            switch items[itemIndex] {
+            case .text(let text):
+                textItems.append(TextItem(
+                    itemIndex: itemIndex,
+                    range: NSRange(location: attributedText.length, length: text.utf16.count)
+                ))
+                attributedText.append(NSAttributedString(string: text))
+            case .inlineView(let view, _):
+                let size = view.bounds.size
+                inlineItems[attributedText.length] = InlineItem(itemIndex: itemIndex, size: size)
+                let delegate = makeInlineViewDelegate(width: max(0, size.width))
+                attributedText.append(NSAttributedString(
+                    string: "\u{FFFC}",
+                    attributes: [kCTRunDelegateAttributeName as NSAttributedString.Key: delegate]
+                ))
+            case .standaloneView, .end:
+                continue
+            }
+        }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = lineHeight
+        paragraphStyle.maximumLineHeight = lineHeight
+        paragraphStyle.lineSpacing = lineSpacing
+        paragraphStyle.lineBreakMode = .byCharWrapping
+        attributedText.addAttributes([
+            .font: font,
+            .kern: AnimationConfiguration.letterSpacing,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraphStyle
+        ], range: NSRange(location: 0, length: attributedText.length))
+        return AttributedTextContent(
+            attributedText: attributedText,
+            textItems: textItems,
+            inlineItems: inlineItems
+        )
+    }
+
     private static func makeInlineViewDelegate(width: CGFloat) -> CTRunDelegate {
         var callbacks = CTRunDelegateCallbacks(
             version: kCTRunDelegateCurrentVersion,
@@ -629,6 +807,7 @@ enum AnimationAtlasBuilder {
         descriptions: [Description],
         standaloneViewLayouts: [StandaloneViewLayout],
         itemHeights: [AnimationItemHeight],
+        contentSegments: [AnimationContentSegment],
         rasters: [RasterKey: Raster],
         hasEnd: Bool,
         maxBlur: Float,
@@ -773,6 +952,7 @@ enum AnimationAtlasBuilder {
             instances: instances,
             standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
+            contentSegments: contentSegments,
             sequenceDelays: sequenceDelays,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,

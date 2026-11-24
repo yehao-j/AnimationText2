@@ -14,12 +14,13 @@ final class ViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
         
         let metalView = MetalAnimationView(
-            frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 500),
-            height: 500,
+            frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 0),
+            height: 200,
             device: nil
         )
-        metalView.layer.borderWidth = 1
-        metalView.layer.borderColor = UIColor.green.cgColor
+//        metalView.backgroundColor = .white
+//        metalView.layer.borderWidth = 1
+//        metalView.layer.borderColor = UIColor.green.cgColor
         view.addSubview(metalView)
 
         metalView.onRenderedContentHeight = {
