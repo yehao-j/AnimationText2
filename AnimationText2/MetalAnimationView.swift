@@ -26,7 +26,7 @@ public enum MetalAnimationItem {
         alignment: MetalStandaloneViewAlignment = .center,
         completion: (() -> Void)? = nil
     )
-    /// 标记流式内容结束；不参与排版，全部动画完成后触发 onAnimationComplete。
+    /// 标记流式内容结束；不参与排版，各 contentView 自身动画完成后触发 onAnimationComplete。
     case end
 }
 
@@ -97,6 +97,7 @@ public final class MetalAnimationView: UIView {
     private var timelineStartTime = CACurrentMediaTime()
     private var renderedContentHeight: CGFloat = 0
     private var lastReportedContentHeight: CGFloat?
+    private var completedSegmentIndexes: Set<Int> = []
 
     private enum PendingLayout {
         case append
@@ -106,8 +107,9 @@ public final class MetalAnimationView: UIView {
     private var appendLayoutScheduled = false
 
     public var onStats: ((PerformanceSnapshot) -> Void)?
-    /// 收到 end 且所有 item 动画完成后回调，此时视图高度已调整为内容高度。
-    public var onAnimationComplete: (() -> Void)?
+    /// 收到 end 后，每个 contentView 自身动画全部完成时各回调一次（参数为 contentView 序号）；
+    /// 最后一次回调时视图高度已调整为内容高度。
+    public var onAnimationComplete: ((Int) -> Void)?
     /// 每行首个 item 渲染前回调截至该行的累计高度，相同高度不重复回调。
     public var onRenderedContentHeight: ((CGFloat) -> Void)?
     public var onError: ((String) -> Void)?
@@ -142,7 +144,7 @@ public final class MetalAnimationView: UIView {
             initializationError = "这台设备不支持 Metal"
         }
         super.init(frame: frameRect)
-//        clipsToBounds = true
+        clipsToBounds = true
         configureRenderer()
         appendMetalView()
     }
@@ -202,11 +204,19 @@ public final class MetalAnimationView: UIView {
         renderer?.onStats = { [weak self] snapshot in
             self?.onStats?(snapshot)
         }
-        renderer?.onAnimationComplete = { [weak self] in
+        renderer?.onAnimationComplete = { [weak self] segmentIndex in
             guard let self else { return }
-            self.metalViews.forEach { $0.isPaused = true }
-            self.onAnimationComplete?()
-            print("MetalAnimationView 整体高度是：", self.renderedContentHeight)
+            self.completedSegmentIndexes.insert(segmentIndex)
+            // 序号 0 的 contentView 负责驱动整体事件（高度回调、性能统计），
+            // 要等所有分段都完成后才能暂停，因此不在这里单独停掉它。
+            if segmentIndex != 0, self.metalViews.indices.contains(segmentIndex) {
+                self.metalViews[segmentIndex].isPaused = true
+            }
+            self.onAnimationComplete?(segmentIndex)
+            print("contentView \(segmentIndex) 动画完成，MetalAnimationView 整体高度：", self.renderedContentHeight)
+            if self.completedSegmentIndexes.count == self.metalViews.count {
+                self.metalViews.forEach { $0.isPaused = true }
+            }
         }
         renderer?.onItemAnimationStart = { [weak self] height in
             guard let self else { return }
@@ -227,8 +237,7 @@ public final class MetalAnimationView: UIView {
             renderer: renderer,
             segmentIndex: index
         )
-        metalView.layer.borderColor = UIColor.red.cgColor
-        metalView.layer.borderWidth = 1
+        
         metalView.backgroundColor = backgroundColor
         metalView.onNeedsLayout = { [weak self] in
             self?.layoutItemsIfNeeded()
@@ -242,6 +251,7 @@ public final class MetalAnimationView: UIView {
         with contentSegments: [AnimationContentSegment],
         preservingTimeline: Bool
     ) {
+        completedSegmentIndexes.removeAll()
         while metalViews.count < contentSegments.count {
             appendMetalView()
         }

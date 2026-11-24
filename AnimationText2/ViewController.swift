@@ -49,8 +49,8 @@ final class ViewController: UIViewController {
             )
             self?.detailLabel.text = "\(snapshot.itemCount) 个动画单元 · 2 draw calls/帧 · 单核 = 100%"
         }
-        metalView.onAnimationComplete = { [weak self] in
-            self?.statsLabel.text = "动画已结束 · Metal 已暂停"
+        metalView.onAnimationComplete = { [weak self] index in
+            self?.statsLabel.text = "contentView \(index) 动画已结束"
         }
         metalView.onError = { [weak self] message in
             self?.showError(title: "排版失败", message: message)
@@ -252,6 +252,10 @@ private enum DemoText {
 
         文字、单词和行内视图共用同一时间轴的入场动画。
         Streaming tokens arrive over SSE, and each word animates as it lands.
+
+        每个 contentView 在自身动画全部播完后各触发一次完成回调。
+        Extra batches keep appending to the timeline without replaying earlier items.
+        完成后该 contentView 会独立暂停，不再占用每帧的绘制开销。
         """
         let bodyItems = MetalAnimationItem.tokenize(content)
         var batches = [prefix]

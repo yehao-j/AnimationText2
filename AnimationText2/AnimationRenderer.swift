@@ -15,7 +15,7 @@ struct AnimationUniforms {
 
 final class AnimationRenderer: NSObject {
     var onStats: ((PerformanceSnapshot) -> Void)?
-    var onAnimationComplete: (() -> Void)?
+    var onAnimationComplete: ((Int) -> Void)?
     var onItemAnimationStart: ((CGFloat) -> Void)?
 
     private let device: MTLDevice
@@ -28,7 +28,7 @@ final class AnimationRenderer: NSObject {
     private var viewportSize = CGSize.zero
     private var startTime = CACurrentMediaTime() + 0.15
     private var nextItemHeightIndex = 0
-    private var completionReported = false
+    private var completionReported: [Bool] = []
     /// 当前动画时间轴的起点，供 standalone view 把 delay 换算成实际等待时长。
     var timelineStartTime: CFTimeInterval { startTime }
     var debugInstanceCount: Int { atlas?.instances.count ?? 0 }
@@ -109,7 +109,7 @@ final class AnimationRenderer: NSObject {
         )
         self.atlas = atlas
         self.viewportSize = viewportSize
-        completionReported = false
+        completionReported = [Bool](repeating: false, count: atlas.contentSegments.count)
         if !preservingTimeline { replay() }
         return atlas.contentSegments
     }
@@ -132,13 +132,16 @@ final class AnimationRenderer: NSObject {
                 onItemAnimationStart?(itemHeight.height)
             }
         }
-        let animationFinished = atlas.hasEnd && rawElapsed >= atlas.animationDuration
+        // 每个 contentView 只对自己分段内的动画负责，到点后各自上报一次完成。
+        if atlas.hasEnd,
+           segmentIndex < completionReported.count,
+           !completionReported[segmentIndex],
+           rawElapsed >= atlas.segmentAnimationEnds[segmentIndex] {
+            completionReported[segmentIndex] = true
+            onAnimationComplete?(segmentIndex)
+        }
 
         if atlas.instances.isEmpty {
-            if reportsEvents, animationFinished, !completionReported {
-                completionReported = true
-                onAnimationComplete?()
-            }
             return
         }
         guard let instanceBuffer,
@@ -236,10 +239,6 @@ final class AnimationRenderer: NSObject {
             let itemCount = atlas.instances.count + atlas.standaloneViewLayouts.count
             if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
                 onStats?(snapshot)
-            }
-            if animationFinished, !completionReported {
-                completionReported = true
-                onAnimationComplete?()
             }
         }
     }

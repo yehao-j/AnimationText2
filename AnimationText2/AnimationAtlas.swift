@@ -70,6 +70,8 @@ struct AnimationAtlas {
     let standaloneViewLayouts: [StandaloneViewLayout]
     let itemHeights: [AnimationItemHeight]
     let contentSegments: [AnimationContentSegment]
+    /// 每个 contentSegment 内最后一个动画单元的完成时刻；contentView 据此各自上报完成。
+    let segmentAnimationEnds: [Float]
     /// 按动画实例生成顺序排列的 delay；流式追加重建时旧实例沿用这些时刻，保证不重播。
     let sequenceDelays: [Float]
     let blurAtlasSize: CGSize
@@ -283,10 +285,15 @@ enum AnimationAtlasBuilder {
             segmentHeight: viewportSize.height,
             lineSpacing: lineSpacing
         )
+        var segmentAnimationEnds = [Float](repeating: 0, count: contentSegments.count)
         itemHeights = itemHeights.map { itemHeight in
             let segmentIndex = contentSegments.lastIndex {
                 itemHeight.height > $0.contentOffsetY
             } ?? 0
+            segmentAnimationEnds[segmentIndex] = max(
+                segmentAnimationEnds[segmentIndex],
+                itemHeight.delay + AnimationConfiguration.duration
+            )
             return AnimationItemHeight(
                 delay: itemHeight.delay,
                 height: itemHeight.height + contentSegments[segmentIndex].displayOffsetY
@@ -332,6 +339,7 @@ enum AnimationAtlasBuilder {
             standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
             contentSegments: contentSegments,
+            segmentAnimationEnds: segmentAnimationEnds,
             rasters: rasters,
             hasEnd: items.contains { item in
                 if case .end = item { return true }
@@ -824,6 +832,7 @@ enum AnimationAtlasBuilder {
         standaloneViewLayouts: [StandaloneViewLayout],
         itemHeights: [AnimationItemHeight],
         contentSegments: [AnimationContentSegment],
+        segmentAnimationEnds: [Float],
         rasters: [RasterKey: Raster],
         hasEnd: Bool,
         maxBlur: Float,
@@ -969,6 +978,7 @@ enum AnimationAtlasBuilder {
             standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
             contentSegments: contentSegments,
+            segmentAnimationEnds: segmentAnimationEnds,
             sequenceDelays: sequenceDelays,
             blurAtlasSize: CGSize(width: blurAtlasWidth, height: blurAtlasHeight),
             animationDuration: animationDuration,
