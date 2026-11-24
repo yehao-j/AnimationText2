@@ -15,6 +15,7 @@ final class ViewController: UIViewController {
         
         let metalView = MetalAnimationView(
             frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 500),
+            height: 500,
             device: nil
         )
         metalView.layer.borderWidth = 1

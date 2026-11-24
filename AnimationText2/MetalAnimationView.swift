@@ -107,16 +107,15 @@ public final class MetalAnimationView: UIView {
         didSet { metalView.backgroundColor = backgroundColor }
     }
 
-    public init(frame frameRect: CGRect, device: MTLDevice?) {
-        // 排版宽度在创建时确定且不再变化，必须传入有效的 frame。
+    public init(frame frameRect: CGRect, height: CGFloat, device: MTLDevice?) {
+        // 排版宽度与 Metal 画布高度在创建时确定且不再变化，必须传入有效值。
         precondition(frameRect.width > 0, "MetalAnimationView 需要有效的 frame，width 不能为 0")
-        metalView = MetalContentView(frame: CGRect(origin: .zero, size: frameRect.size), device: device)
-        super.init(frame: CGRect(
-            x: frameRect.minX,
-            y: frameRect.minY,
-            width: frameRect.width,
-            height: AnimationConfiguration.lineHeight
-        ))
+        precondition(height > 0, "MetalAnimationView 需要有效的 height，height 不能为 0")
+        metalView = MetalContentView(
+            frame: CGRect(origin: .zero, size: CGSize(width: frameRect.width, height: height)),
+            device: device
+        )
+        super.init(frame: frameRect)
         clipsToBounds = true
         addSubview(metalView)
         metalView.onRenderedContentHeight = { [weak self] height in
