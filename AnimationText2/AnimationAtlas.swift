@@ -437,7 +437,7 @@ enum AnimationAtlasBuilder {
             return AnimationContentSegment(
                 contentOffsetY: contentOffset,
                 renderOffsetY: contentOffset + segmentHeight - layoutHeight,
-                displayOffsetY: CGFloat(index) * (segmentHeight + lineSpacing) - contentOffset,
+                displayOffsetY: CGFloat(index) * lineSpacing,
                 visibleHeight: visibleHeight,
                 standaloneViewLayouts: layoutsBySegment[index]
             )

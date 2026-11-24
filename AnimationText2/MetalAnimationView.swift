@@ -136,7 +136,7 @@ public final class MetalAnimationView: UIView {
             initializationError = "这台设备不支持 Metal"
         }
         super.init(frame: frameRect)
-        clipsToBounds = true
+//        clipsToBounds = true
         configureRenderer()
         appendMetalView()
     }
@@ -215,9 +215,8 @@ public final class MetalAnimationView: UIView {
     @discardableResult
     private func appendMetalView() -> MetalContentView {
         let index = metalViews.count
-        let y = metalViews.last.map { $0.frame.maxY + AnimationConfiguration.lineSpacing } ?? 0
         let metalView = MetalContentView(
-            frame: CGRect(x: 0, y: y, width: bounds.width, height: contentHeight),
+            frame: CGRect(x: 0, y: 0, width: bounds.width, height: contentHeight),
             device: device,
             renderer: renderer,
             segmentIndex: index
@@ -243,13 +242,17 @@ public final class MetalAnimationView: UIView {
         while metalViews.count > contentSegments.count {
             metalViews.removeLast().removeFromSuperview()
         }
+        var y: CGFloat = 0
         for (index, segment) in contentSegments.enumerated() {
-            metalViews[index].applyStandaloneViewLayouts(
+            let metalView = metalViews[index]
+            metalView.frame.origin.y = y
+            metalView.applyStandaloneViewLayouts(
                 segment.standaloneViewLayouts,
                 timelineStartTime: timelineStartTime,
                 preservingTimeline: preservingTimeline
             )
-            metalViews[index].isPaused = false
+            metalView.isPaused = false
+            y += segment.visibleHeight + AnimationConfiguration.lineSpacing
         }
     }
 
