@@ -11,14 +11,14 @@ final class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(red: 0.965, green: 0.957, blue: 0.935, alpha: 1)
+        view.backgroundColor = UIColor(red: 0.8, green: 0.8, blue: 0.8, alpha: 1)
         
         let metalView = MetalAnimationView(
             frame: CGRect(x: 20, y: 100, width: view.bounds.width - 40, height: 0),
             height: 200,
             device: nil
         )
-//        metalView.backgroundColor = .white
+        metalView.backgroundColor = .clear
 //        metalView.layer.borderWidth = 1
 //        metalView.layer.borderColor = UIColor.green.cgColor
         view.addSubview(metalView)
@@ -240,7 +240,7 @@ private enum DemoText {
             .text(" Text "),
             .text("一起"),
             .text("出现"),
-            .text("\n\n")
+            .text("\n")
         ]
 
         let content = """
