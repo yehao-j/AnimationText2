@@ -166,7 +166,7 @@ public final class MetalAnimationView: UIView {
             initializationError = "这台设备不支持 Metal"
         }
         super.init(frame: frameRect)
-        clipsToBounds = true
+//        clipsToBounds = true
         configureRenderer()
         appendMetalView()
     }

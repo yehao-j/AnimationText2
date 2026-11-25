@@ -4,9 +4,9 @@ import UIKit
 
 struct AnimationConfiguration {
     /// 单个动画单元的动画时长，单位为秒。
-    static let duration: Float = 0.4
+    static let duration: Float = 4
     /// 相邻动画单元开始动画的时间间隔，单位为秒。
-    static let stagger: Float = 0.06
+    static let stagger: Float = 2
     
     /// 动画开始前的延迟时间，单位为秒。
     static let startDelay: TimeInterval = 2
