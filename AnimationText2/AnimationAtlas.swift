@@ -24,6 +24,7 @@ struct AnimationInstance {
     let blurUVOrigin: SIMD2<Float>
     let blurUVSize: SIMD2<Float>
     let delay: Float
+    let hidesAfterAnimation: Float
     private let padding: Float = 0
 }
 
@@ -50,7 +51,6 @@ struct AnimationContentSegment {
 struct AnimationAtlas {
     let texture: MTLTexture
     let instances: [AnimationInstance]
-    let standaloneViewLayouts: [StandaloneViewLayout]
     let itemHeights: [AnimationItemHeight]
     let contentSegments: [AnimationContentSegment]
     /// 每个 contentSegment 内最后一个动画单元的完成时刻；contentView 据此各自上报完成。
@@ -137,6 +137,7 @@ enum AnimationAtlasBuilder {
 
     private enum RasterKey: Hashable {
         case text(String, [GlyphKey])
+        case view(Int)
         case lineBackground(Int)
     }
 
@@ -150,6 +151,8 @@ enum AnimationAtlasBuilder {
         let bounds: CGRect
         let delay: Float
         let participatesInTimeline: Bool
+        /// true 表示动画结束后丢弃 Metal 快照、由真实 view 接管显示；false 则快照保持最终帧。
+        let hidesAfterAnimation: Bool
     }
 
     static func build(
@@ -223,36 +226,62 @@ enum AnimationAtlasBuilder {
                     text: text,
                     textColor: textColor,
                     glyphs: glyphsByItem[itemIndex] ?? [],
-                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
+                    delay: delay(for: descriptions.count),
                     rasters: &rasters
                 )
             case .inlineView(let view, _, let completion):
-                description = nil
-                guard let frame = textLayout.inlineFrames[itemIndex] else { break }
-                let inlineLayout = StandaloneViewLayout(
+                guard let frame = textLayout.inlineFrames[itemIndex] else {
+                    description = nil
+                    break
+                }
+                let itemDelay = delay(for: descriptions.count)
+                standaloneViewLayouts.append(StandaloneViewLayout(
                     view: view,
                     frame: frame,
-                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
+                    delay: itemDelay,
                     completion: completion
-                )
-                standaloneViewLayouts.append(inlineLayout)
-                itemHeights.append(AnimationItemHeight(
-                    delay: inlineLayout.delay,
-                    height: textLayout.itemHeights[itemIndex]!
                 ))
-            case .standaloneView(let view, _, let completion):
-                description = nil
-                let standaloneLayout = StandaloneViewLayout(
+                description = makeViewDescription(
                     view: view,
-                    frame: textLayout.standaloneFrames[itemIndex]!,
-                    delay: delay(for: descriptions.count + standaloneViewLayouts.count),
-                    completion: completion
+                    itemIndex: itemIndex,
+                    frame: frame,
+                    viewportHeight: layoutViewportSize.height,
+                    delay: itemDelay,
+                    hidesAfterAnimation: true,
+                    rasters: &rasters
                 )
-                standaloneViewLayouts.append(standaloneLayout)
-                itemHeights.append(AnimationItemHeight(
-                    delay: standaloneLayout.delay,
-                    height: standaloneLayout.frame.maxY
+            case .staticInlineView(let view, _):
+                guard let frame = textLayout.inlineFrames[itemIndex] else {
+                    description = nil
+                    break
+                }
+                description = makeViewDescription(
+                    view: view,
+                    itemIndex: itemIndex,
+                    frame: frame,
+                    viewportHeight: layoutViewportSize.height,
+                    delay: delay(for: descriptions.count),
+                    hidesAfterAnimation: false,
+                    rasters: &rasters
+                )
+            case .standaloneView(let view, _, let completion):
+                let frame = textLayout.standaloneFrames[itemIndex]!
+                let itemDelay = delay(for: descriptions.count)
+                standaloneViewLayouts.append(StandaloneViewLayout(
+                    view: view,
+                    frame: frame,
+                    delay: itemDelay,
+                    completion: completion
                 ))
+                description = makeViewDescription(
+                    view: view,
+                    itemIndex: itemIndex,
+                    frame: frame,
+                    viewportHeight: layoutViewportSize.height,
+                    delay: itemDelay,
+                    hidesAfterAnimation: true,
+                    rasters: &rasters
+                )
             case .end:
                 description = nil
             }
@@ -315,7 +344,8 @@ enum AnimationAtlasBuilder {
                         height: frame.height
                     ),
                     delay: -AnimationConfiguration.duration,
-                    participatesInTimeline: false
+                    participatesInTimeline: false,
+                    hidesAfterAnimation: false
                 )
             }
             descriptions.insert(contentsOf: backgrounds, at: 0)
@@ -323,7 +353,6 @@ enum AnimationAtlasBuilder {
 
         return try makeAtlas(
             descriptions: descriptions,
-            standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
             contentSegments: contentSegments,
             segmentAnimationEnds: segmentAnimationEnds,
@@ -689,7 +718,7 @@ enum AnimationAtlasBuilder {
                     range: NSRange(location: attributedText.length, length: text.utf16.count)
                 ))
                 attributedText.append(NSAttributedString(string: text))
-            case .inlineView(let view, let spacing, _):
+            case .inlineView(let view, let spacing, _), .staticInlineView(let view, let spacing):
                 let size = view.bounds.size
                 if spacing > 0, itemIndex != items.startIndex {
                     appendSpacing(width: spacing)
@@ -817,13 +846,54 @@ enum AnimationAtlasBuilder {
             key: key,
             bounds: bounds,
             delay: delay,
-            participatesInTimeline: true
+            participatesInTimeline: true,
+            hidesAfterAnimation: false
+        )
+    }
+
+    private static func makeViewDescription(
+        view: UIView,
+        itemIndex: Int,
+        frame: CGRect,
+        viewportHeight: CGFloat,
+        delay: Float,
+        hidesAfterAnimation: Bool,
+        rasters: inout [RasterKey: Raster]
+    ) -> Description {
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        let key = RasterKey.view(itemIndex)
+        rasters[key] = Raster(size: frame.size) { context, rect in
+            context.saveGState()
+            context.translateBy(x: rect.minX, y: rect.maxY)
+            context.scaleBy(x: 1, y: -1)
+            UIGraphicsPushContext(context)
+            let drewHierarchy = view.drawHierarchy(
+                in: CGRect(origin: .zero, size: rect.size),
+                afterScreenUpdates: true
+            )
+            UIGraphicsPopContext()
+            if !drewHierarchy {
+                view.layer.render(in: context)
+            }
+            context.restoreGState()
+        }
+        return Description(
+            key: key,
+            bounds: CGRect(
+                x: frame.minX,
+                y: viewportHeight - frame.maxY,
+                width: frame.width,
+                height: frame.height
+            ),
+            delay: delay,
+            participatesInTimeline: true,
+            hidesAfterAnimation: hidesAfterAnimation
         )
     }
 
     private static func makeAtlas(
         descriptions: [Description],
-        standaloneViewLayouts: [StandaloneViewLayout],
         itemHeights: [AnimationItemHeight],
         contentSegments: [AnimationContentSegment],
         segmentAnimationEnds: [Float],
@@ -928,6 +998,7 @@ enum AnimationAtlasBuilder {
         let instances = descriptions.enumerated().map { index, description in
             let pixelRect = pixelRectsByKey[description.key]!
             let blurPixelRect = blurPixelRects[index]
+            let hidesAfterAnimation: Float = description.hidesAfterAnimation ? 1 : 0
             let absoluteOrigin = CGPoint(
                 x: description.bounds.minX - paddingInPoints,
                 y: description.bounds.minY - paddingInPoints
@@ -955,21 +1026,17 @@ enum AnimationAtlasBuilder {
                     Float(blurPixelRect.width / CGFloat(blurAtlasWidth)),
                     Float(blurPixelRect.height / CGFloat(blurAtlasHeight))
                 ),
-                delay: description.delay
+                delay: description.delay,
+                hidesAfterAnimation: hidesAfterAnimation
             )
         }
 
         // delay 随生成序号严格递增，排序后即实例的生成顺序。
-        var sequenceDelays = standaloneViewLayouts.map(\.delay)
-        for description in descriptions where description.participatesInTimeline {
-            sequenceDelays.append(description.delay)
-        }
-        sequenceDelays.sort()
+        let sequenceDelays = descriptions.filter(\.participatesInTimeline).map(\.delay).sorted()
         let animationDuration = sequenceDelays.last.map { $0 + AnimationConfiguration.duration } ?? 0
         return AnimationAtlas(
             texture: texture,
             instances: instances,
-            standaloneViewLayouts: standaloneViewLayouts,
             itemHeights: itemHeights,
             contentSegments: contentSegments,
             segmentAnimationEnds: segmentAnimationEnds,

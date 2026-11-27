@@ -13,14 +13,22 @@ public enum MetalAnimationItem {
     /// 作为行内元素紧跟前一个元素排版，直接读取 view.bounds.size，并在当前行内垂直居中；
     /// spacing 为 view 两侧各留出的间距。view 是首个 item 时不加左侧间距；右侧间距用行尾空格
     /// 实现，view 排到行尾时间距悬挂不显示，也不会把 view 挤到下一行。
-    /// 保留原生 UIKit 内部动画（如指示器旋转）；入场动画与 standaloneView 同款由 UIKit 按时间轴播放，
-    /// 播完回调 completion（流式追加不重播旧内容，不会重复回调）。
+    /// 入场前只光栅化一次，与文本共用 Metal 位移、透明度和高斯模糊动画；期间 view 必须保持静态。
+    /// 动画结束切回原始 view 并回调 completion，之后可执行原生 UIKit 内部动画（流式追加不重播旧内容）。
     case inlineView(
         UIView,
         spacing: CGFloat = 0,
         completion: (() -> Void)? = nil
     )
+    /// 排版与 inlineView 相同（spacing 为 view 两侧各留出的间距）；区别是全程使用入场前的
+    /// 一次性快照：动画结束后 Metal 快照保持最终帧显示，不切回真实 view，view 也不会加入
+    /// 视图层级，只用于测量尺寸与光栅化。
+    case staticInlineView(
+        UIView,
+        spacing: CGFloat = 0
+    )
     /// 原生 View 独占一行并按 alignment 对齐；直接读取 view.bounds.size，宽度夹紧到 MetalAnimationView 宽度。
+    /// 入场期间与 inlineView 一样使用一次性光栅化的 Metal 动画，结束后切回原始 view。
     case standaloneView(
         UIView,
         alignment: MetalStandaloneViewAlignment = .center,
@@ -310,9 +318,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
     private var standaloneViewLayouts: [StandaloneViewLayout] = []
     private var timelineStartTime = CACurrentMediaTime()
     private var standaloneContainers: [ObjectIdentifier: UIView] = [:]
-    private var standaloneBlurViews: [ObjectIdentifier: UIVisualEffectView] = [:]
-    private var standaloneAnimators: [ObjectIdentifier: UIViewPropertyAnimator] = [:]
-    private var standaloneStartWorkItems: [ObjectIdentifier: DispatchWorkItem] = [:]
 
     init(
         frame frameRect: CGRect,
@@ -335,11 +340,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
 
     public required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        standaloneStartWorkItems.values.forEach { $0.cancel() }
-        standaloneAnimators.values.forEach { $0.stopAnimation(true) }
     }
 
     public override var backgroundColor: UIColor? {
@@ -376,13 +376,8 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
         let validIdentifiers = Set(standaloneViewLayouts.map { ObjectIdentifier($0.view) })
         let staleIdentifiers = standaloneContainers.keys.filter { !validIdentifiers.contains($0) }
         for identifier in staleIdentifiers {
-            standaloneStartWorkItems[identifier]?.cancel()
-            standaloneAnimators[identifier]?.stopAnimation(true)
             standaloneContainers[identifier]?.removeFromSuperview()
             standaloneContainers.removeValue(forKey: identifier)
-            standaloneBlurViews.removeValue(forKey: identifier)
-            standaloneAnimators.removeValue(forKey: identifier)
-            standaloneStartWorkItems.removeValue(forKey: identifier)
         }
 
         var newIdentifiers = Set<ObjectIdentifier>()
@@ -399,73 +394,34 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
                 standaloneContainers[identifier] = container
                 newIdentifiers.insert(identifier)
             }
-            let blurView: UIVisualEffectView
-            if let existing = standaloneBlurViews[identifier] {
-                blurView = existing
-            } else {
-                blurView = UIVisualEffectView()
-                blurView.isUserInteractionEnabled = false
-                container.addSubview(blurView)
-                standaloneBlurViews[identifier] = blurView
-            }
-            // 模糊层默认是直角矩形，会盖住 view 自身的圆角；跟随 view 的圆角设置。
-            blurView.layer.cornerRadius = layout.view.layer.cornerRadius
-            blurView.layer.cornerCurve = layout.view.layer.cornerCurve
-            blurView.clipsToBounds = true
-            // 续接时旧 view 的待启动任务和进行中的动画都保持不动，只更新布局。
-            if !preservingTimeline || newIdentifiers.contains(identifier) {
-                standaloneStartWorkItems[identifier]?.cancel()
-                standaloneAnimators[identifier]?.stopAnimation(true)
-                container.transform = .identity
-            }
             container.bounds.size = layout.frame.size
             container.center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
             layout.view.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
-            blurView.frame = container.bounds
             layout.view.setNeedsLayout()
             layout.view.layoutIfNeeded()
         }
-        replayStandaloneViews(newIdentifiers: preservingTimeline ? newIdentifiers : nil)
+        prepareStandaloneViews(newIdentifiers: preservingTimeline ? newIdentifiers : nil)
     }
 
-    /// newIdentifiers 为 nil 时全部重播；否则只播放本次新增的 view，已显示的保持原状。
-    private func replayStandaloneViews(newIdentifiers: Set<ObjectIdentifier>?) {
+    /// newIdentifiers 为 nil 时全部重播；否则只处理本次新增的 view，已显示的保持原状。
+    private func prepareStandaloneViews(newIdentifiers: Set<ObjectIdentifier>?) {
         for layout in standaloneViewLayouts {
             let identifier = ObjectIdentifier(layout.view)
             if let newIdentifiers, !newIdentifiers.contains(identifier) { continue }
-            guard let container = standaloneContainers[identifier],
-                  let blurView = standaloneBlurViews[identifier] else { continue }
-            standaloneStartWorkItems[identifier]?.cancel()
-            standaloneAnimators[identifier]?.stopAnimation(true)
-            container.isHidden = true
-            container.alpha = 0
-            blurView.effect = AnimationConfiguration.maxBlur > 0 ? UIBlurEffect(style: .regular) : nil
-            container.transform = CGAffineTransform(
-                translationX: 0,
-                y: CGFloat(AnimationConfiguration.travelDistance)
-            )
-            let animator = UIViewPropertyAnimator(
-                duration: TimeInterval(AnimationConfiguration.duration),
-                curve: .linear
-            ) {
-                container.alpha = 1
-                container.transform = .identity
-                blurView.effect = nil
-            }
-            animator.addCompletion { position in
-                guard position == .end else { return }
-                layout.completion?()
-            }
-            let startWorkItem = DispatchWorkItem {
-                container.isHidden = false
-                animator.startAnimation()
-            }
-            standaloneAnimators[identifier] = animator
-            standaloneStartWorkItems[identifier] = startWorkItem
-            // layout.delay 是相对 renderer 时间轴起点的时刻，换算成相对现在的等待时长，
-            // 保证 standalone view 与 GPU 实例同步（重置与追加都适用）。
-            let delay = max(0, timelineStartTime + TimeInterval(layout.delay) - CACurrentMediaTime())
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: startWorkItem)
+            standaloneContainers[identifier]?.isHidden = true
+        }
+    }
+
+    private func showCompletedStandaloneViews() {
+        let now = CACurrentMediaTime()
+        for layout in standaloneViewLayouts {
+            guard let container = standaloneContainers[ObjectIdentifier(layout.view)],
+                  container.isHidden,
+                  now >= timelineStartTime
+                    + TimeInterval(layout.delay)
+                    + TimeInterval(AnimationConfiguration.duration) else { continue }
+            container.isHidden = false
+            layout.completion?()
         }
     }
 
@@ -478,5 +434,6 @@ private final class MetalContentView: MTKView, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         renderer?.draw(in: view, segmentIndex: segmentIndex, reportsEvents: segmentIndex == 0)
+        showCompletedStandaloneViews()
     }
 }

@@ -240,8 +240,7 @@ final class AnimationRenderer: NSObject {
         commandBuffer.commit()
 
         if reportsEvents {
-            let itemCount = atlas.instances.count + atlas.standaloneViewLayouts.count
-            if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: itemCount) {
+            if let snapshot = performanceMonitor.frameRendered(at: now, itemCount: atlas.instances.count) {
                 onStats?(snapshot)
             }
         }

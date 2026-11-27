@@ -208,7 +208,7 @@ private enum DemoText {
         standaloneIndicator: UIActivityIndicatorView
     ) -> [[MetalAnimationItem]] {
         let prefix: [MetalAnimationItem] = [
-            .inlineView(inlineViews[0], spacing: 10),
+            .staticInlineView(inlineViews[0], spacing: 10),
             .text("汉"),
             .text("字"),
             .text("与"),
@@ -240,7 +240,7 @@ private enum DemoText {
 
             .text("静"),
             .text("态"),
-            .inlineView(inlineViews[3]),
+            .staticInlineView(inlineViews[3]),
             .text("也能"),
             .text("和"),
             .text(" Text "),

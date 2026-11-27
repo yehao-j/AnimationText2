@@ -9,6 +9,7 @@ struct AnimationInstance {
     float2 blurUVOrigin;
     float2 blurUVSize;
     float delay;
+    float hidesAfterAnimation;
     float padding;
 };
 
@@ -47,7 +48,8 @@ VertexOut animatedInstanceVertex(
     out.blurRadiusInPixels = uniforms.maxBlurInPixels * (1.0 - smoothstep(0.12, 1.0, progress));
 
     out.position = float4(2, 2, 0, 1);
-    if (rawProgress <= 0.0) {
+    if (rawProgress <= 0.0
+        || (rawProgress >= 1.0 && instance.hidesAfterAnimation > 0.5)) {
         return out;
     }
 
@@ -76,7 +78,9 @@ vertex VertexOut horizontalAnimationVertex(
     out.uvMin = instance.uvOrigin;
     out.uvMax = instance.uvOrigin + instance.uvSize;
 
-    if (uniforms.time > instance.delay) {
+    const float rawProgress = (uniforms.time - instance.delay) / uniforms.duration;
+    if (rawProgress > 0.0
+        && (rawProgress < 1.0 || instance.hidesAfterAnimation <= 0.5)) {
         const float2 blurUV = instance.blurUVOrigin
             + float2(corner.x, 1.0 - corner.y) * instance.blurUVSize;
         out.position = float4(blurUV.x * 2.0 - 1.0, 1.0 - blurUV.y * 2.0, 0, 1);
